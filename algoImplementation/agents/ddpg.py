@@ -89,7 +89,7 @@ class DDPGAgent:
         self.critic_opt = Adam(lr=lr_critic)
 
         self.buffer = ReplayBuffer(buffer_size, state_dim)
-        self.noise  = OUNoise(action_dim, seed=seed)
+        self.noise = OUNoise(action_dim, mu=0.0, theta=0.15, sigma=0.05, seed=seed)
 
         # Logging
         self.losses      = []
@@ -99,12 +99,9 @@ class DDPGAgent:
     # ── Action selection ───────────────────────────────────────────────────────
 
     def select_action(self, state: np.ndarray, add_noise: bool = True) -> float:
-        """Returns continuous hold duration in [0, 30] minutes."""
-        import sys, os
-        from utils.networks import tanh
         raw    = self.actor.forward(state)
-        action = float(np.tanh(raw[0]))                           # squash to (-1,1)
-        action = (action + 1) / 2 * self.action_high             # scale to [0,30]
+        # Scale to [0, 15] max instead of [0, 30] — start conservative
+        action = (float(np.tanh(raw[0])) + 1) / 2 * 15.0
         if add_noise:
             action += float(self.noise.sample()[0])
         return float(np.clip(action, self.action_low, self.action_high))
@@ -113,8 +110,8 @@ class DDPGAgent:
         return self.select_action(state, add_noise=False)
 
     def discrete_action(self, state: np.ndarray) -> int:
-        """Convert continuous action to nearest discrete index for env compatibility."""
         hold = self.greedy_action(state)
+        # Map continuous [0,30] to nearest discrete index
         durations = [0, 5, 10, 15, 20, 25, 30]
         return int(np.argmin([abs(hold - d) for d in durations]))
 
