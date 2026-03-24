@@ -28,7 +28,7 @@ from utils.networks import MLP, Adam, ReplayBuffer
 class OUNoise:
     """Ornstein-Uhlenbeck process for temporally correlated exploration noise."""
     def __init__(self, action_dim: int = 1, mu: float = 0.0,
-                 theta: float = 0.15, sigma: float = 0.2, seed: int = 42):
+                 theta: float = 0.15, sigma: float = 0.05, seed: int = 42):
         self.mu        = mu * np.ones(action_dim)
         self.theta     = theta
         self.sigma     = sigma
