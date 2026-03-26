@@ -41,6 +41,7 @@ from simulator.models import (
     TailPlan,
 )
 
+from rewardEngineering.reward_calculator import RewardCalculator
 
 # ======================================================================
 # Metrics tracker
@@ -155,6 +156,8 @@ class AirlineNetworkSimulator:
         self._done: bool = True
         self._pending_hnh_flight: Optional[str] = None
         self._pending_context: Optional[FlightContext] = None
+        
+        self.reward_calculator = RewardCalculator(self.cfg)
 
     # ==================================================================
     # Gym-like API
@@ -167,9 +170,7 @@ class AirlineNetworkSimulator:
         self.event_engine.clear()
         self.context_engine.reset()
         self.metrics.reset()
-        if hasattr(self, "reward_calculator"):
-            from rewardEngineering.reward_calculator import RewardCalculator
-            self.reward_calculator = RewardCalculator(self.cfg)
+        self.reward_calculator = RewardCalculator(self.cfg)  # fresh per episode
         self.flights.clear()
         self.tail_plans.clear()
         self.pax.clear()
@@ -351,42 +352,46 @@ class AirlineNetworkSimulator:
     def _handle_departure(self, event: SimEvent) -> Optional[List[SimEvent]]:
         fid = event.flight_id
         fs = self.flights[fid]
+
         if fs.status != FlightStatus.SCHEDULED:
             return None
 
         fs.status = FlightStatus.DEPARTED
-        fs.compute_actual_times()
-        self.metrics.departed_flights += 1
-        self.metrics.departure_delays.append(fs.departure_delay_D)
-        
-        # Build departure segment of the delay tree via RewardCalculator
-        if not hasattr(self, "reward_calculator"):
-            from rewardEngineering.reward_calculator import RewardCalculator
-            self.reward_calculator = RewardCalculator(self.cfg)
-            
-        # Get incoming flight delays for the hold tree node
-        incoming_flights_delays = []
-        for p_id in self._incoming_pax.get(fid, []):
-            pax = self.pax[p_id]
-            # If fid is the second leg, the first leg is the incoming flight
-            if len(pax.legs) >= 2 and pax.legs[1] == fid:
-                inc_fid = pax.legs[0]
-                inc_fs = self.flights.get(inc_fid)
-                if inc_fs and inc_fs.status == FlightStatus.ARRIVED:
-                    incoming_flights_delays.append((inc_fid, max(0, inc_fs.arrival_delay_A)))
-                    
+
+        # ---- Reward Engine: Departure registration ----
         prev_fid = self._prev_tail_flight.get(fid)
-        prev_arr_delay = max(0, self.flights[prev_fid].arrival_delay_A) if prev_fid and self.flights[prev_fid].status == FlightStatus.ARRIVED else 0.0
+        prev_arr_delay = 0.0
+
+        if prev_fid and self.flights[prev_fid].actual_arrival is not None:
+            prev_arr_delay = self.flights[prev_fid].arrival_delay_A
+
+        incoming = [
+            (
+                self.pax[pid].legs[0],
+                self.flights[self.pax[pid].legs[0]].arrival_delay_A
+            )
+            for pid in self._incoming_pax.get(fid, [])
+            if pid in self.pax
+            and len(self.pax[pid].legs) >= 2
+            and self.pax[pid].legs[0] in self.flights
+            and self.flights[self.pax[pid].legs[0]].actual_arrival is not None
+        ]
 
         self.reward_calculator.register_flight_departure(
             flight_id=fid,
-            departure_delay=max(0, fs.departure_delay_D),
-            prev_flight_id=prev_fid,
+            departure_delay=fs.departure_delay_D,
+            prev_flight_id=prev_fid or "",
             prev_arrival_delay=prev_arr_delay,
             hold_duration=fs.hold_delay,
-            departure_ground_delay=max(0, fs.departure_delay_D - prev_arr_delay - fs.hold_delay), # Approximation of GD_i
-            incoming_flights=incoming_flights_delays
+            departure_ground_delay=fs.ground_departure_delay,
+            incoming_flights=incoming,
         )
+
+        # ---- Normal simulator logic ----
+        fs.compute_actual_times()
+
+        self.metrics.departed_flights += 1
+        self.metrics.departure_delays.append(fs.departure_delay_D)
 
         day = int(fs.actual_departure // 1440)
         self.metrics.daily_flights[day] = self.metrics.daily_flights.get(day, 0) + 1
@@ -400,41 +405,44 @@ class AirlineNetworkSimulator:
     def _handle_arrival(self, event: SimEvent) -> Optional[List[SimEvent]]:
         fid = event.flight_id
         fs = self.flights[fid]
+
         fs.status = FlightStatus.ARRIVED
         fs.compute_actual_times()
 
         arr_delay = fs.arrival_delay_A
+
+        # ---- Compute utilities ----
+        au = 1.0 - min(max(arr_delay, 0), self.cfg.delta_f) / self.cfg.delta_f
+        pu = 1.0 - min(max(arr_delay, 0), self.cfg.delta_p) / self.cfg.delta_p
+
+        # ---- Reward Engine: Arrival registration ----
+        self.reward_calculator.register_flight_arrival(
+            flight_id=fid,
+            arrival_delay=arr_delay,
+            departure_delay=fs.departure_delay_D,
+            air_time_delay=fs.airtime_delay,
+            arrival_ground_delay=fs.ground_arrival_delay,
+            arrival_pu=pu,
+            arrival_au=au,
+        )
+
+        # ---- Metrics ----
         self.metrics.arrived_flights += 1
         self.metrics.arrival_delays.append(arr_delay)
 
         day = int(fs.actual_arrival // 1440)
+
         if arr_delay <= self.cfg.ontime_threshold:
             self.metrics.ontime_arrivals += 1
             self.metrics.daily_ontime[day] = self.metrics.daily_ontime.get(day, 0) + 1
 
-        au = 1.0 - min(max(arr_delay, 0), self.cfg.delta_f) / self.cfg.delta_f
+        # ---- Global utility tracking ----
         self.context_engine.record_global_au(event.time, au)
-        
-        # We need a PU metric for this flight ending locally. Currently just using 1.0 if not delayed much.
-        pu_approx = 1.0 - min(max(arr_delay, 0), self.cfg.delta_p) / self.cfg.delta_p
-        
-        if not hasattr(self, "reward_calculator"):
-            from rewardEngineering.reward_calculator import RewardCalculator
-            self.reward_calculator = RewardCalculator(self.cfg)
-            
-        # Approximation of air time delay and ground delay vs intrinsic delays
-        self.reward_calculator.register_flight_arrival(
-            flight_id=fid,
-            arrival_delay=max(0, arr_delay),
-            departure_delay=max(0, fs.departure_delay_D),
-            air_time_delay=max(0, arr_delay - fs.departure_delay_D), # T_i + GA_i combined approximately
-            arrival_ground_delay=0.0,
-            arrival_pu=pu_approx - 1.0, # Negative penalty proxy
-            arrival_au=au - 1.0         # Negative penalty proxy
-        )
+        self.context_engine.record_global_pu(event.time, pu)
 
-        # Trigger PAX connection checks for PAX on this flight with onward legs
+        # ---- Trigger PAX connection checks ----
         new_events = []
+
         for pax_id in self._outgoing_pax.get(fid, []):
             pax = self.pax.get(pax_id)
             if pax and len(pax.legs) >= 2 and pax.legs[0] == fid:
@@ -444,6 +452,7 @@ class AirlineNetworkSimulator:
                     flight_id=fid,
                     pax_id=pax_id,
                 ))
+
         return new_events if new_events else None
 
     def _handle_pax_connection(self, event: SimEvent) -> Optional[List[SimEvent]]:
@@ -578,14 +587,7 @@ class AirlineNetworkSimulator:
         ctx = self._pending_context
         if ctx is None:
             return 0.0
-            
-        # Use our new RewardCalculator instead of just local PU/AU!
-        if not hasattr(self, "reward_calculator"):
-            from rewardEngineering.reward_calculator import RewardCalculator
-            self.reward_calculator = RewardCalculator(self.cfg)
-            
         reward = self.reward_calculator.get_total_reward(ctx, hold_minutes, flight_id)
-        
         self.metrics.rewards.append(reward)
         return reward
 
