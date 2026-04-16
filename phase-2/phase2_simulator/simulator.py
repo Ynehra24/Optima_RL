@@ -344,17 +344,8 @@ class CrossDockSimulator:
         self.event_engine.register_handler(EventType.CARGO_TRANSFER_CHECK,  self._handle_cargo_transfer)
 
     def _schedule_initial_events(self) -> None:
-        """Schedule TRUCK_DOCK at scheduled_dock and HOLD_DECISION 10 min
-        before scheduled_departure for every truck in the simulation.
-
-        FIX: TRUCK_DOCK events were missing in v1 → BG was always 0.
-        """
         for tid, ts in self.trucks.items():
             # TRUCK_DOCK: truck arrives at bay — actual time includes arrival lateness
-            # FIX: was firing at scheduled_dock (always on time → ZG always 0)
-            # Now fires at scheduled_dock + intrinsic_departure_delay: a truck that
-            # is behind schedule (e.g. traffic, prior stop overrun) docks late,
-            # registering in ZG (inbound queue depth)
             dock_time = max(0.0, ts.truck.scheduled_dock + ts.intrinsic_departure_delay)
             self.event_engine.schedule(SimEvent(
                 time=dock_time,
