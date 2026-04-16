@@ -409,8 +409,11 @@ class ContextEngine:
             raw = (1 + sla_urgency) * (1.0 - math.exp(-k * delay))
             return float(np.clip(raw, 0.0, 1.0))
         else:
-            # PDF §5.1 linear formula
-            return (1 + sla_urgency) * min(delay, delta_C) / delta_C
+            # PDF §5.1 linear formula, clipped to [0,1]
+            # (1+Xk) can push sigma > 1.0 when Xk > 0 — clip to prevent
+            # negative CL values (cargo can't have utility worse than total loss)
+            raw = (1 + sla_urgency) * min(delay, delta_C) / delta_C
+            return float(np.clip(raw, 0.0, 1.0))
 
     def _estimate_cargo_delay(self, cargo: CargoUnit, inbound_ts: TruckState,
                               hold_tau: int, mtt: int,
