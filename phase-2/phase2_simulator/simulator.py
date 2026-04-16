@@ -1,28 +1,3 @@
-"""
-Logistics Cross-Docking Microsimulator — main orchestrator.
-
-Mirrors simulator/simulator.py field-for-field, with these genuine improvements:
-
-CRITICAL BUGS FIXED vs v1:
-  1. BG always 0% → TRUCK_DOCK events now scheduled; _active_bays correctly tracks
-  2. WG/YG wrong → context_engine.record_transfer_outcome() now records both
-  3. trucks.index() O(n) crash → dict lookup in _enrich_truck_states()
-
-GENUINE LOGISTICS IMPROVEMENTS:
-  4. CARGO_TRANSFER_CHECK triggered on TRUCK_DOCK (inbound arrival), not on departure
-     — more realistic: we know at dock time if cargo will make it
-  5. Bay curfew enforced in step(): if BG > bay_curfew_threshold, hold forced to 0
-  6. Road delay compounds with ZG: G_road = base × (1 + ZG × 0.5) — congestion cascade
-  7. Multi-tier SLA penalty in MetricsTracker: X_k=2 flagged as priority miss
-  8. Four metrics reported: OTP + failed-transfer rate + avg delivery delay + dock congestion
-
-FOUR METRICS (not two like the original):
-  1. Schedule OTP       — trucks departing within 15 min of schedule
-  2. Failed transfer %  — connecting cargo that misses its outbound truck
-  3. Avg delivery delay — mean A_k across all delivered trucks (minutes)
-  4. Bay congestion     — mean BG across all departure events
-"""
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -365,11 +340,6 @@ class CrossDockSimulator:
     # ==================================================================
 
     def _handle_dock(self, event: SimEvent) -> Optional[List[SimEvent]]:
-        """Truck backs into a docking bay at the hub (origin side).
-
-        Purpose: track bay utilisation (BG) and delayed-inbound queue (ZG).
-        Does NOT trigger cargo transfer checks — those fire at destination arrival.
-        """
         tid = event.truck_id
         ts  = self.trucks.get(tid)
         if ts is None or ts.status != TruckStatus.SCHEDULED:
@@ -395,13 +365,6 @@ class CrossDockSimulator:
         return None
 
     def _handle_departure(self, event: SimEvent) -> Optional[List[SimEvent]]:
-        """Truck departs the hub.
-
-        Mirrors _handle_departure from simulator/simulator.py.
-        Frees one docking bay. Records operator utility.
-        Schedules CARGO_TRANSFER_CHECK at actual_arrival — this is the correct
-        time to check whether connecting cargo makes the outbound truck at destination.
-        """
         tid = event.truck_id
         ts  = self.trucks.get(tid)
         if ts is None or ts.status not in (TruckStatus.SCHEDULED, TruckStatus.DOCKED):
@@ -436,17 +399,6 @@ class CrossDockSimulator:
         )]
 
     def _handle_cargo_transfer(self, event: SimEvent) -> Optional[List[SimEvent]]:
-        """Triggered at truck's actual_arrival at destination hub.
-
-        Does two things in one event (same as original aviation simulator):
-          1. Marks the truck as DELIVERED and records arrival metrics.
-          2. Checks every cargo unit that traveled on this truck and needs
-             a connecting outbound truck — determines success or failure.
-
-        This is the correct timing: we know the inbound truck's actual
-        arrival delay, and we compare it to each outbound truck's planned
-        (or actual) departure to determine the transfer window.
-        """
         tid = event.truck_id
         ts  = self.trucks.get(tid)
         if ts is None:
