@@ -96,7 +96,7 @@ $$
 
 ### State Vector
 
-**Phase 1** — 22 dimensions covering: number of connecting passengers, incoming flight delays, departure delay components, local PU/AU utilities, global PG/AG utilities.
+**Phase 1** — 17 dimensions: 7×PL(τ) + 7×AL(τ) + PG + AG + τ*.
 
 **Phase 2** — 34 dimensions. Extends Phase 1 with:
 
