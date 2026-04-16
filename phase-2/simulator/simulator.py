@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import os
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,6 +26,13 @@ from phase2_simulator.models import (
     TruckState,
     TruckStatus,
 )
+
+# Ensure the phase-2 directory is on the path so rewardEngineering is importable
+_phase2_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _phase2_dir not in sys.path:
+    sys.path.insert(0, _phase2_dir)
+
+from rewardEngineering.reward_calculator import LogisticsRewardCalculator
 
 
 # ====================================================================
@@ -173,6 +182,9 @@ class CrossDockSimulator:
         self._active_bays: int = 0     # trucks currently docked (drives BG)
         self._delayed_inbound: int = 0
 
+        # ── Reward engine (mirrors Phase 1) ───────────────────────────
+        self.reward_calculator = LogisticsRewardCalculator(self.cfg)
+
     # ==================================================================
     # Gym API — identical to AirlineNetworkSimulator
     # ==================================================================
@@ -186,6 +198,7 @@ class CrossDockSimulator:
         self.event_engine.clear()
         self.context_engine.reset()
         self.metrics.reset()
+        self.reward_calculator = LogisticsRewardCalculator(self.cfg)  # fresh per episode
         self.trucks.clear()
         self.truck_plans.clear()
         self.cargo.clear()
@@ -389,9 +402,40 @@ class CrossDockSimulator:
         ou = 1.0 - min(max(ts.departure_delay_D, 0.0), self.cfg.delta_F) / self.cfg.delta_F
         self.context_engine.record_global_operator_utility(event.time, ou)
 
+        # ── Reward Engine: Departure registration (mirrors Phase 1) ───
+        prev_tid = self._prev_route_truck.get(tid)
+        prev_arr_delay = 0.0
+        if prev_tid and self.trucks[prev_tid].actual_arrival is not None:
+            prev_arr_delay = self.trucks[prev_tid].arrival_delay_A
+
+        # Build incoming feeders list: (truck_id, arrival_delay) for each
+        # cargo unit's inbound truck that has already arrived
+        feeder_seen = set()
+        incoming_feeders = []
+        for cid in self._inbound_cargo.get(tid, []):
+            cu = self.cargo.get(cid)
+            if cu is None or len(cu.legs) < 2:
+                continue
+            in_tid = cu.legs[0]
+            if in_tid in feeder_seen:
+                continue
+            feeder_seen.add(in_tid)
+            in_ts = self.trucks.get(in_tid)
+            if in_ts and in_ts.actual_arrival is not None:
+                incoming_feeders.append((in_tid, in_ts.arrival_delay_A))
+
+        self.reward_calculator.register_truck_departure(
+            truck_id=tid,
+            departure_delay=ts.departure_delay_D,
+            prev_truck_id=prev_tid,
+            prev_arrival_delay=prev_arr_delay,
+            hold_duration=ts.hold_delay,
+            departure_ground_delay=ts.intrinsic_departure_delay,
+            bay_blockage_delay=ts.bay_dwell_delay,
+            incoming_trucks=incoming_feeders,
+        )
+
         # Schedule cargo transfer check at DESTINATION arrival time.
-        # At that moment we know the inbound truck's actual arrival delay
-        # and can correctly compare it to each outbound truck's departure time.
         return [SimEvent(
             time=ts.actual_arrival,
             event_type=EventType.CARGO_TRANSFER_CHECK,
@@ -405,6 +449,9 @@ class CrossDockSimulator:
             return None
 
         # ── Step 1: Mark this truck as DELIVERED at destination ───────
+        arr_delay = 0.0
+        ou_val    = 0.0
+        cu_val    = 0.0
         if ts.status == TruckStatus.DEPARTED:
             ts.status         = TruckStatus.DELIVERED
             ts.actual_arrival = event.time
@@ -412,7 +459,19 @@ class CrossDockSimulator:
             arr_delay = ts.arrival_delay_A
             self.metrics.arrival_delays.append(arr_delay)
             cu_val = 1.0 - min(max(arr_delay, 0.0), self.cfg.delta_C) / self.cfg.delta_C
+            ou_val = 1.0 - min(max(arr_delay, 0.0), self.cfg.delta_F) / self.cfg.delta_F
             self.context_engine.record_global_cargo_utility(event.time, cu_val)
+
+            # ── Reward Engine: Arrival registration (mirrors Phase 1) ─
+            self.reward_calculator.register_truck_arrival(
+                truck_id=tid,
+                arrival_delay=arr_delay,
+                departure_delay=ts.departure_delay_D,
+                road_delay=ts.road_delay,
+                arrival_bay_delay=ts.bay_arrival_delay,
+                arrival_cu=cu_val,
+                arrival_ou=ou_val,
+            )
 
         # ── Step 2: Check every cargo unit that traveled on this truck
         #            and needs a connecting outbound truck at this hub
@@ -422,6 +481,9 @@ class CrossDockSimulator:
         mtt       = hub_obj.min_transfer_time if hub_obj else self.cfg.min_transfer_time_spoke
         day       = int(actual_in // 1440)
 
+        # Track bay blockage caused by this truck's hold (for congestion attribution)
+        blocked_trucks: Dict[str, float] = {}
+
         for cid in self._outbound_cargo.get(tid, []):
             cu = self.cargo.get(cid)
             if cu is None or len(cu.legs) < 2 or cu.legs[0] != tid:
@@ -430,6 +492,10 @@ class CrossDockSimulator:
             outbound_ts = self.trucks.get(cu.legs[1])
             if outbound_ts is None:
                 continue
+
+            # Collect bay-blockage delays on outbound trucks caused by congestion
+            if outbound_ts.bay_dwell_delay > 0:
+                blocked_trucks[cu.legs[1]] = outbound_ts.bay_dwell_delay
 
             # Best estimate of outbound departure (actual if departed, else planned)
             if outbound_ts.actual_departure is not None:
@@ -466,6 +532,13 @@ class CrossDockSimulator:
                     rebook_delay, cu.sla_urgency, cu.is_perishable)
                 self.context_engine.record_global_cargo_utility(event.time, 1.0 - sigma)
                 self.context_engine.record_transfer_outcome(event.time, succeeded=False)
+
+        # ── Reward Engine: Bay-congestion attribution [Phase 2 only] ──
+        if blocked_trucks and ts.hold_delay > 0:
+            self.reward_calculator.register_bay_congestion(
+                held_truck_id=tid,
+                blocked_trucks=blocked_trucks,
+            )
 
         return None
 
@@ -631,22 +704,14 @@ class CrossDockSimulator:
     def _compute_reward(self, truck_id: str, hold_minutes: float) -> float:
         """R_T_k = β·R_L_k + (1-β)·R_G_k  (PDF §5.5)
 
-        R_L_k = α·CL(τ) + (1-α)·OL(τ)
-        R_G_k = α·CG   + (1-α)·OG
+        Delegates to LogisticsRewardCalculator, which uses the live
+        Delay Tree for R_G (including bay-congestion attribution).
+        Mirrors Phase 1's _compute_basic_reward() exactly.
         """
         ctx = self._pending_context
         if ctx is None:
             return 0.0
-        alpha = self.cfg.alpha
-        beta  = self.cfg.beta
-
-        action_idx = (self.cfg.hold_actions.index(int(hold_minutes))
-                      if int(hold_minutes) in self.cfg.hold_actions else 0)
-        cl_val = ctx.CL[action_idx] if action_idx < len(ctx.CL) else 0.5
-        ol_val = ctx.OL[action_idx] if action_idx < len(ctx.OL) else 0.5
-        R_L = alpha * cl_val + (1 - alpha) * ol_val
-        R_G = alpha * ctx.CG  + (1 - alpha) * ctx.OG
-        reward = float(beta * R_L + (1 - beta) * R_G)
+        reward = self.reward_calculator.get_total_reward(ctx, hold_minutes, truck_id)
         self.metrics.rewards.append(reward)
         return reward
 
