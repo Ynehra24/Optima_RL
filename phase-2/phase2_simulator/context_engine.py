@@ -35,6 +35,8 @@ KEY FIXES vs previous version:
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -446,6 +448,3 @@ class ContextEngine:
         self._failed_transfer_history.clear()
         self._inbound_queue_history.clear()
 
-
-# ── math needed for exponential disutility ──────────────────────────
-import math

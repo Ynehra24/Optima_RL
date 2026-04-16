@@ -255,7 +255,7 @@ class EventType(Enum):
     TRUCK_DOCK = auto()             # truck arrives and backs into a docking bay at hub
     TRUCK_DEPARTURE = auto()        # truck leaves the hub (loaded or not)
     HOLD_DECISION = auto()          # RL agent decision point (was HNH_DECISION)
-    CARGO_TRANSFER_CHECK = auto()   # triggered on dock: can inbound cargo make outbound?
+    CARGO_TRANSFER_CHECK = auto()   # triggered at destination arrival: can inbound cargo make outbound?
     EPOCH_START = auto()
     EPOCH_END = auto()
 
