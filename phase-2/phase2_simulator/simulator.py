@@ -350,9 +350,12 @@ class CrossDockSimulator:
         FIX: TRUCK_DOCK events were missing in v1 → BG was always 0.
         """
         for tid, ts in self.trucks.items():
-            # TRUCK_DOCK: truck backs into bay at scheduled_dock time
+            # TRUCK_DOCK: truck arrives at bay — actual time includes bay arrival delay
+            # FIX: was firing at scheduled_dock (always on time → ZG always 0)
+            # Now fires at scheduled_dock + bay_arrival_delay so late docks register in ZG
+            dock_time = max(0.0, ts.truck.scheduled_dock + ts.bay_arrival_delay)
             self.event_engine.schedule(SimEvent(
-                time=max(0.0, ts.truck.scheduled_dock),
+                time=dock_time,
                 event_type=EventType.TRUCK_DOCK,
                 truck_id=tid,
             ))
