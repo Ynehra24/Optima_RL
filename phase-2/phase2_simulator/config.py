@@ -20,7 +20,7 @@ Aviation → Logistics term mapping (for reference):
   delta_f                 → delta_F  (operator delay cap)
   alpha                   → alpha   (cargo vs operator trade-off)
   beta                    → beta    (local vs global trade-off)
-  NEW: lambda_congestion, B_thresh, T_sla (logistics-only, from PDF §7)
+  We added: lambda_congestion, B_thresh, T_sla (logistics-only, from PDF §7)
 """
 
 from __future__ import annotations
