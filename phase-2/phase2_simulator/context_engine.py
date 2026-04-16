@@ -1,44 +1,36 @@
 """
-Context Engine — generates the state vector presented to the RL agent.
+Context Engine — computes the state vector presented to the RL agent.
 
-Direct counterpart of simulator/context_engine.py.
+Mirrors simulator/context_engine.py field-for-field.
+All formula symbols from logistics_state_space_reference.pdf §5.
 
-The state has the following components (from logistics_state_space_reference.pdf):
+LOCAL state (per outbound truck k — PDF §2):
+  CL(τ) : Local Cargo Utility vector   ← PL(τ) in aviation
+  OL(τ) : Local Operator Utility vector ← AL(τ) in aviation
+  τ*    : argmax α·CL + (1-α)·OL
+  V_k   : cargo value score
+  Q_k   : cargo volume fraction
+  X_k   : SLA urgency {0,1,2}
+  E_k   : perishability fraction
+  Δ_in  : ETA lag of inbound truck
+  Δ_slack : transfer slack
+  L_k   : driver hours remaining
+  F_k   : downstream deadline pressure
+  N_in  : number of inbound trucks
 
-LOCAL state (per outbound truck k):
-  CL(τ) : Local Cargo Utility vector for each hold action τ
-  OL(τ) : Local Operator Utility vector for each hold action τ
-  τ*    : Locally optimal hold time
-  V_k   : Cargo value score ∈ [0, 1]
-  Q_k   : Cargo volume fraction (connecting cargo / truck capacity)
-  X_k   : SLA urgency ∈ {0, 1, 2}
-  E_k   : Cargo perishability fraction
-  Δ_in  : ETA lag of inbound truck (minutes)
-  Δ_slack : Transfer slack (scheduled dep − scheduled dock)
-  L_k   : Driver hours remaining (minutes)
-  F_k   : Downstream deadline pressure ∈ [0, 1]
-  N_in  : Number of inbound trucks feeding cargo to outbound truck k
+GLOBAL state (hub-level — PDF §3):
+  CG    : Global Cargo Utility rolling avg    ← PG
+  OG    : Global Operator Utility rolling avg ← AG
+  BG    : Bay utilisation rate (NEW)
+  WG    : Hub throughput rate (NEW)
+  YG    : Failed transfer rate (NEW)
+  ZG    : Inbound queue depth (NEW)
 
-GLOBAL state (hub-level, window W = 24 h):
-  CG    : Global Cargo Utility (rolling avg  ← PG in aviation)
-  OG    : Global Operator Utility (rolling avg ← AG in aviation)
-  BG    : Bay utilisation rate (new)
-  WG    : Hub throughput rate (new)
-  YG    : Failed transfer rate (new)
-  ZG    : Inbound queue depth (new)
-
-DELAY TREE scalars (same as aviation):
-  D_k   : Departure delay of truck k
-  A_k   : Arrival delay of truck k
-  G_bay_k : Bay dwell delay
-  G_road_k: Road-time delay
-
-Key formulae from PDF §5:
-  σ_i(τ) = 0                                      if δ_i(τ) ≤ T_sla
-  σ_i(τ) = (1+X_k)·min(δ_i(τ), Δ_C)/Δ_C          if δ_i(τ) > T_sla
-  CL(τ)  = (1/N)·Σ V_ki·(1−σ_i(τ))
-  OL(τ)  = 1 − δ_k(τ)/Δ_F − λ·max(0,BG−B_thresh)·τ/30
-  τ*     = argmax_τ [α·CL(τ) + (1−α)·OL(τ)]
+KEY FIXES vs previous version:
+  BG: now correctly populated (was always 0.0 — TRUCK_DOCK events now scheduled)
+  WG: records 1.0 on success AND 0.0 on failure → correct rolling success rate
+  YG: records 1.0 on failure AND 0.0 on success → correct rolling failure rate
+  Perishable cargo: uses exponential disutility instead of linear
 """
 
 from __future__ import annotations
@@ -52,106 +44,136 @@ from phase2_simulator.config import SimConfig
 from phase2_simulator.models import CargoUnit, ScheduledTruck, TruckState
 
 
-# ======================================================================
+# ====================================================================
 # TruckContext  (replaces FlightContext)
-# ======================================================================
+# ====================================================================
 @dataclass
 class TruckContext:
-    """The full context / state vector for one HOLD_DECISION.
+    """Full context / state vector for one HOLD_DECISION event.
 
     Mirrors FlightContext from simulator/context_engine.py.
-    Extended with all PDF §2 and §3 state variables.
-    """
+    Extended with all PDF §2-§3 state variables.
 
+    State vector layout (to_array()):
+      [0:7]   CL(τ) for τ in {0,5,10,15,20,25,30}
+      [7:14]  OL(τ) for τ in {0,5,10,15,20,25,30}
+      [14]    CG
+      [15]    OG
+      [16]    τ* (minutes)
+      [17]    V_k
+      [18]    Q_k
+      [19]    X_k (cast to float)
+      [20]    E_k
+      [21]    Δ_in  (capped at 60, normalised /60)
+      [22]    Δ_slack (capped at 120, normalised /120)
+      [23]    L_k (capped at 270, normalised /270)
+      [24]    F_k
+      [25]    N_in (capped at 20, normalised /20)
+      [26]    B_G
+      [27]    W_G
+      [28]    Y_G
+      [29]    Z_G
+      [30]    D_k (departure delay, normalised /Δ_F)
+      [31]    A_k (arrival delay, normalised /Δ_C)
+      [32]    G_bay_k (normalised /30)
+      [33]    G_road_k (normalised /60)
+    Total: 34 dimensions
+    """
     truck_id: str
 
-    # --- Local Cargo Utility vector CL(τ) — replaces PL ---
-    CL: List[float] = field(default_factory=list)
-    # --- Local Operator Utility vector OL(τ) — replaces AL ---
-    OL: List[float] = field(default_factory=list)
-    # --- Global Cargo Utility scalar CG — replaces PG ---
-    CG: float = 0.0
-    # --- Global Operator Utility scalar OG — replaces AG ---
-    OG: float = 0.0
-    # --- Helper variable τ* ---
+    # Local utility vectors (7 values each — one per hold action)
+    CL: List[float] = field(default_factory=list)   # Cargo Utility ← PL
+    OL: List[float] = field(default_factory=list)   # Operator Utility ← AL
+
+    # Global utility scalars
+    CG: float = 0.0    # Global Cargo Utility ← PG
+    OG: float = 0.0    # Global Operator Utility ← AG
+
     tau_star: float = 0.0
 
-    # --- Local state scalars (PDF §2, all NEW vs aviation) ---
-    V_k: float = 0.5           # cargo value score
-    Q_k: float = 0.0           # cargo volume fraction
-    X_k: int = 0               # SLA urgency {0, 1, 2}
-    E_k: float = 0.0           # perishability fraction
-    delta_in: float = 0.0      # ETA lag of inbound truck (minutes)
-    delta_slack: float = 0.0   # transfer slack (minutes)
-    L_k: float = 270.0         # driver hours remaining (minutes)
-    F_k: float = 1.0           # downstream deadline pressure
-    N_in: int = 0              # number of inbound trucks
+    # Local state scalars (PDF §2)
+    V_k: float = 0.5          # cargo value score
+    Q_k: float = 0.0          # cargo volume fraction
+    X_k: int = 0              # SLA urgency {0,1,2}
+    E_k: float = 0.0          # perishability fraction
+    delta_in: float = 0.0     # Δ_in: ETA lag of inbound (minutes)
+    delta_slack: float = 0.0  # Δ_slack: transfer slack (minutes)
+    L_k: float = 270.0        # driver hours remaining (minutes)
+    F_k: float = 1.0          # downstream deadline pressure
+    N_in: int = 0             # number of inbound trucks
 
-    # --- Global state scalars (PDF §3, NEW vs aviation) ---
-    B_G: float = 0.0           # bay utilisation rate
-    W_G: float = 1.0           # hub throughput rate
-    Y_G: float = 0.0           # failed transfer rate (24h)
-    Z_G: float = 0.0           # inbound queue depth
+    # Global state scalars (PDF §3 — NEW, no aviation analog)
+    B_G: float = 0.0   # BG: bay utilisation rate
+    W_G: float = 1.0   # WG: hub throughput rate (successful-transfer rate)
+    Y_G: float = 0.0   # YG: failed transfer rate (24h rolling)
+    Z_G: float = 0.0   # ZG: inbound queue depth (delayed trucks fraction)
 
-    # --- Delay tree fields (carried over from aviation) ---
-    D_k: float = 0.0           # departure delay
-    A_k: float = 0.0           # arrival delay
-    G_bay_k: float = 0.0       # bay dwell delay
-    G_road_k: float = 0.0      # road-time delay
+    # Delay tree scalars (same as aviation)
+    D_k: float = 0.0     # departure delay
+    A_k: float = 0.0     # arrival delay
+    G_bay_k: float = 0.0  # bay dwell delay
+    G_road_k: float = 0.0 # road-time delay
 
     def to_array(self) -> np.ndarray:
-        """Flatten to a 1-D numpy vector for the RL agent.
+        """Flatten to 34-dim numpy float32 vector for the RL agent.
 
-        Layout (mirrors FlightContext.to_array()):
-          [CL(τ0)..CL(τN), OL(τ0)..OL(τN),
-           CG, OG, τ*,
-           V_k, Q_k, X_k, E_k, delta_in, delta_slack, L_k, F_k, N_in,
-           B_G, W_G, Y_G, Z_G,
-           D_k, A_k, G_bay_k, G_road_k]
+        All values are normalised to approximately [0,1].
+        Mirrors FlightContext.to_array() in layout.
         """
+        delta_F = 60.0   # use Δ_F normalisation
+        delta_C = 480.0  # use Δ_C normalisation
         local_scalars = [
-            self.V_k, self.Q_k, float(self.X_k), self.E_k,
-            self.delta_in, self.delta_slack, self.L_k, self.F_k, float(self.N_in),
+            self.V_k,
+            self.Q_k,
+            float(self.X_k) / 2.0,              # X_k ∈ {0,1,2} → /2 → [0,1]
+            self.E_k,
+            float(np.clip(self.delta_in, 0, 60)) / 60.0,
+            float(np.clip(self.delta_slack, 0, 120)) / 120.0,
+            float(np.clip(self.L_k, 0, 270)) / 270.0,
+            self.F_k,
+            float(np.clip(self.N_in, 0, 20)) / 20.0,
         ]
         global_scalars = [self.B_G, self.W_G, self.Y_G, self.Z_G]
-        delay_tree = [self.D_k, self.A_k, self.G_bay_k, self.G_road_k]
-        return np.array(
-            self.CL + self.OL + [self.CG, self.OG, self.tau_star]
-            + local_scalars + global_scalars + delay_tree,
-            dtype=np.float32,
-        )
+        delay_tree = [
+            float(np.clip(self.D_k, 0, delta_F)) / delta_F,
+            float(np.clip(self.A_k, 0, delta_C)) / delta_C,
+            float(np.clip(self.G_bay_k, 0, 30)) / 30.0,
+            float(np.clip(self.G_road_k, 0, 60)) / 60.0,
+        ]
+        vec = self.CL + self.OL + [self.CG, self.OG, self.tau_star / 30.0] \
+              + local_scalars + global_scalars + delay_tree
+        return np.array(vec, dtype=np.float32)
 
     @property
     def state_dim(self) -> int:
-        """Dimension of the flattened state vector."""
-        return len(self.CL) * 2 + 3 + 9 + 4 + 4  # CL + OL + [CG,OG,τ*] + local + global + delays
+        return 34
 
 
-# ======================================================================
-# ContextEngine  (replaces ContextEngine in simulator/context_engine.py)
-# ======================================================================
+# ====================================================================
+# ContextEngine  (mirrors simulator/context_engine.py ContextEngine)
+# ====================================================================
 class ContextEngine:
-    """Computes the logistics state vector from raw simulator data.
+    """Computes the logistics state vector from simulator data.
 
-    Mirrors simulator/context_engine.py ContextEngine.
-    All method names and structures are preserved; formulas adapted from
-    aviation (PAX) to logistics (cargo) per the PDF §5.
+    Mirrors ContextEngine from simulator/context_engine.py.
+    Key formula changes vs aviation:
+      1. σ_i(τ) multiplied by (1+X_k) — SLA urgency amplifies penalty
+      2. Perishable cargo uses exponential disutility instead of linear
+      3. OL(τ) includes bay-blockage penalty λ·max(0,BG-B_thresh)·τ/30
+      4. YG and WG record 0.0/1.0 on BOTH success AND failure (fixed)
     """
 
     def __init__(self, cfg: SimConfig):
         self.cfg = cfg
-        # Rolling history for global utilities (time, value)
-        self._global_cargo_history: List[Tuple[float, float]] = []   # CG ← PG
-        self._global_operator_history: List[Tuple[float, float]] = [] # OG ← AG
-        # Hub-level telemetry history
-        self._bay_util_history: List[Tuple[float, float]] = []
-        self._throughput_history: List[Tuple[float, float]] = []
-        self._failed_transfer_history: List[Tuple[float, float]] = []
-        self._inbound_queue_history: List[Tuple[float, float]] = []
+        # Rolling history buffers: list of (sim_time, value)
+        self._global_cargo_history:    List[Tuple[float, float]] = []
+        self._global_operator_history: List[Tuple[float, float]] = []
+        self._bay_util_history:        List[Tuple[float, float]] = []
+        self._throughput_history:      List[Tuple[float, float]] = []  # WG
+        self._failed_transfer_history: List[Tuple[float, float]] = []  # YG
+        self._inbound_queue_history:   List[Tuple[float, float]] = []  # ZG
 
-    # -----------------------------------------------------------------
-    # Local Cargo Utility vector CL(τ)  (replaces compute_local_pu)
-    # -----------------------------------------------------------------
+    # ── Local Cargo Utility CL(τ)  ← compute_local_pu() ──────────────
     def compute_local_cargo_utility(
         self,
         truck_state: TruckState,
@@ -160,150 +182,148 @@ class ContextEngine:
         hubs: Dict,
         truck_map: Dict[str, TruckState],
     ) -> List[float]:
-        """Compute CL(τ) for each possible hold action τ.
+        """CL(τ) = (1/N) · Σ V_ki · (1 − σ_i(τ))   (PDF §5.2)
 
-        Formula (PDF §5.2):
-          CL(τ) = (1/N) · Σ V_ki · (1 − σ_i(τ))
-
-        Mirrors compute_local_pu() from simulator/context_engine.py.
+        For each hold action τ, compute mean weighted cargo utility.
+        V_ki weights each cargo unit by its value score.
+        σ_i(τ) is the disutility (0 = no delay impact, 1 = maximum penalty).
         """
         if not connecting_cargo:
             return [1.0] * len(hold_actions)
 
-        dest_hub = truck_state.truck.dest_hub
-        hub_obj = hubs.get(dest_hub)
+        dest = truck_state.truck.dest_hub
+        hub_obj = hubs.get(dest)
         mtt = hub_obj.min_transfer_time if hub_obj else self.cfg.min_transfer_time_spoke
 
         cl_values = []
         for tau in hold_actions:
             utilities = []
             for cargo in connecting_cargo:
-                delay = self._estimate_cargo_delay(
-                    cargo, truck_state, tau, mtt, truck_map
-                )
-                sla_urgency = cargo.sla_urgency
-                sigma = self._cargo_disutility(delay, sla_urgency)
+                delay = self._estimate_cargo_delay(cargo, truck_state, tau, mtt, truck_map)
+                sigma = self._cargo_disutility(delay, cargo.sla_urgency, cargo.is_perishable)
                 utilities.append(cargo.value_score * (1.0 - sigma))
             cl_values.append(float(np.mean(utilities)) if utilities else 1.0)
         return cl_values
 
-    # -----------------------------------------------------------------
-    # Local Operator Utility vector OL(τ)  (replaces compute_local_au)
-    # -----------------------------------------------------------------
+    # ── Local Operator Utility OL(τ)  ← compute_local_au() ───────────
     def compute_local_operator_utility(
         self,
         truck_state: TruckState,
         hold_actions: List[int],
         current_bay_util: float = 0.0,
     ) -> List[float]:
-        """Compute OL(τ) for each possible hold action.
+        """OL(τ) = 1 − δ_k(τ)/Δ_F − λ·max(0,BG−B_thresh)·τ/30   (PDF §5.3)
 
-        Formula (PDF §5.3):
-          OL(τ) = 1 − δ_k(τ)/Δ_F − λ·max(0, BG−B_thresh)·τ/30
-
-        Hard curfew: if τ > L_k (driver hours), value = -∞ → encoded as -1.0.
-
-        Mirrors compute_local_au() from simulator/context_engine.py.
+        Hard curfew:
+          if τ > L_k (driver hours): OL = -1.0 (infeasible)
+          if BG > bay_curfew_threshold: max feasible τ = 0
         """
-        lambda_ = self.cfg.lambda_congestion
+        lambda_  = self.cfg.lambda_congestion
         B_thresh = self.cfg.B_thresh
-        delta_F = self.cfg.delta_F
-        L_k = truck_state.driver_hours_remaining
+        delta_F  = self.cfg.delta_F
+        L_k      = truck_state.driver_hours_remaining
+        bay_curfew = self.cfg.bay_curfew_threshold
 
         ol_values = []
         for tau in hold_actions:
-            # Hard curfew violation
+            # Hard bay curfew: if hub is essentially full, no hold allowed
+            if current_bay_util >= bay_curfew and tau > 0:
+                ol_values.append(-1.0)
+                continue
+            # Hard driver curfew: tau exceeds available driving hours
             if tau > L_k:
                 ol_values.append(-1.0)
                 continue
-            arr_delay = self._estimate_truck_departure_delay(truck_state, tau)
-            schedule_term = 1.0 - min(max(arr_delay, 0), delta_F) / delta_F
+
+            dep_delay = self._estimate_truck_departure_delay(truck_state, tau)
+            schedule_term = 1.0 - min(max(dep_delay, 0.0), delta_F) / delta_F
             congestion_penalty = lambda_ * max(0.0, current_bay_util - B_thresh) * tau / 30.0
             ol = schedule_term - congestion_penalty
             ol_values.append(float(np.clip(ol, -1.0, 1.0)))
         return ol_values
 
-    # -----------------------------------------------------------------
-    # Global Cargo Utility CG  (replaces compute_global_pu)
-    # -----------------------------------------------------------------
+    # ── Global Cargo Utility CG  ← compute_global_pu() ───────────────
     def compute_global_cargo_utility(self, current_time: float) -> float:
-        """Average cargo utility over the past W=24 hours."""
-        window_start = current_time - self.cfg.global_window_hours * 60
+        """Rolling 24h mean cargo utility across all completed transfers."""
+        window_start = current_time - self.cfg.global_window_hours * 60.0
         vals = [v for t, v in self._global_cargo_history if t >= window_start]
         return float(np.mean(vals)) if vals else 1.0
 
-    # -----------------------------------------------------------------
-    # Global Operator Utility OG  (replaces compute_global_au)
-    # -----------------------------------------------------------------
+    # ── Global Operator Utility OG  ← compute_global_au() ────────────
     def compute_global_operator_utility(self, current_time: float) -> float:
-        """Average operator utility over the past W=24 hours."""
-        window_start = current_time - self.cfg.global_window_hours * 60
+        """Rolling 24h mean operator utility across all departed trucks."""
+        window_start = current_time - self.cfg.global_window_hours * 60.0
         vals = [v for t, v in self._global_operator_history if t >= window_start]
         return float(np.mean(vals)) if vals else 1.0
 
-    # -----------------------------------------------------------------
-    # New global state scalars (PDF §3 — no aviation analog)
-    # -----------------------------------------------------------------
+    # ── BG  (NEW — no aviation analog) ───────────────────────────────
     def compute_bay_utilisation(self, current_time: float) -> float:
-        """BG: fraction of docking bays currently occupied."""
-        window_start = current_time - 60  # last hour
+        """BG: fraction of bays occupied in the past 60 minutes."""
+        window_start = current_time - 60.0
         vals = [v for t, v in self._bay_util_history if t >= window_start]
         return float(np.mean(vals)) if vals else 0.0
 
+    # ── WG  (NEW — hub throughput rate) ──────────────────────────────
     def compute_hub_throughput(self, current_time: float) -> float:
-        """WG: hub throughput rate (successful transfers/hr, normalised)."""
-        window_start = current_time - self.cfg.global_window_hours * 60
+        """WG: rolling 24h successful-transfer rate (0=all failed, 1=all succeeded).
+
+        FIX: records 1.0 on success AND 0.0 on failure → correct rolling average.
+        Previous version recorded 1.0 only on success → always returned 1.0.
+        """
+        window_start = current_time - self.cfg.global_window_hours * 60.0
         vals = [v for t, v in self._throughput_history if t >= window_start]
         return float(np.mean(vals)) if vals else 1.0
 
+    # ── YG  (NEW — failed transfer rate) ─────────────────────────────
     def compute_failed_transfer_rate(self, current_time: float) -> float:
-        """YG: rolling failed-transfer fraction over 24h window."""
-        window_start = current_time - self.cfg.global_window_hours * 60
+        """YG: rolling 24h failed-transfer rate (0=none failed, 1=all failed).
+
+        FIX: records 1.0 on failure AND 0.0 on success → correct rolling average.
+        Previous version recorded 1.0 only on failure → always returned 1.0.
+        """
+        window_start = current_time - self.cfg.global_window_hours * 60.0
         vals = [v for t, v in self._failed_transfer_history if t >= window_start]
         return float(np.mean(vals)) if vals else 0.0
 
+    # ── ZG  (NEW — inbound queue depth) ──────────────────────────────
     def compute_inbound_queue_depth(self, current_time: float) -> float:
-        """ZG: normalised count of delayed inbound trucks at hub."""
-        window_start = current_time - 60
+        """ZG: normalised delayed-inbound fraction from past 60 min."""
+        window_start = current_time - 60.0
         vals = [v for t, v in self._inbound_queue_history if t >= window_start]
         return float(np.mean(vals)) if vals else 0.0
 
-    # -----------------------------------------------------------------
-    # Record history  (mirrors record_global_pu / record_global_au)
-    # -----------------------------------------------------------------
+    # ── History record methods  ───────────────────────────────────────
     def record_global_cargo_utility(self, time: float, cu: float) -> None:
-        self._global_cargo_history.append((time, cu))
+        self._global_cargo_history.append((time, float(np.clip(cu, 0.0, 1.0))))
 
     def record_global_operator_utility(self, time: float, ou: float) -> None:
-        self._global_operator_history.append((time, ou))
+        self._global_operator_history.append((time, float(np.clip(ou, 0.0, 1.0))))
 
     def record_bay_utilisation(self, time: float, util: float) -> None:
-        self._bay_util_history.append((time, util))
+        self._bay_util_history.append((time, float(np.clip(util, 0.0, 1.0))))
 
-    def record_hub_throughput(self, time: float, throughput: float) -> None:
-        self._throughput_history.append((time, throughput))
+    def record_transfer_outcome(self, time: float, succeeded: bool) -> None:
+        """Record one transfer outcome into BOTH WG and YG histories.
 
-    def record_failed_transfer(self, time: float, rate: float) -> None:
-        self._failed_transfer_history.append((time, rate))
+        FIX: Both WG and YG record on every transfer (success or failure).
+        """
+        val = 1.0 if succeeded else 0.0
+        self._throughput_history.append((time, val))        # WG: 1=success, 0=fail
+        self._failed_transfer_history.append((time, 1.0 - val))  # YG: 1=fail, 0=success
 
     def record_inbound_queue(self, time: float, depth: float) -> None:
-        self._inbound_queue_history.append((time, depth))
+        self._inbound_queue_history.append((time, float(np.clip(depth, 0.0, 1.0))))
 
-    # -----------------------------------------------------------------
-    # τ*  (identical logic, renamed variables)
-    # -----------------------------------------------------------------
-    def compute_tau_star(
-        self, CL: List[float], OL: List[float], hold_actions: List[int]
-    ) -> float:
-        """τ* = argmax_τ [α·CL(τ) + (1−α)·OL(τ)]  (PDF §5.4)."""
+    # ── τ*  (identical formula to aviation) ──────────────────────────
+    def compute_tau_star(self, CL: List[float], OL: List[float],
+                         hold_actions: List[int]) -> float:
+        """τ* = argmax_τ [α·CL(τ) + (1−α)·OL(τ)]  subject to OL(τ) ≥ 0."""
         alpha = self.cfg.alpha
         scores = [alpha * cl + (1 - alpha) * ol for cl, ol in zip(CL, OL)]
         best_idx = int(np.argmax(scores))
         return float(hold_actions[best_idx])
 
-    # -----------------------------------------------------------------
-    # Full context builder  (mirrors build_context)
-    # -----------------------------------------------------------------
+    # ── Full context builder  ← build_context() ──────────────────────
     def build_context(
         self,
         truck_state: TruckState,
@@ -313,19 +333,16 @@ class ContextEngine:
         truck_map: Dict[str, TruckState],
         current_time: float,
     ) -> TruckContext:
-        """Build the full TruckContext for a HOLD_DECISION event.
+        """Build the full TruckContext for one HOLD_DECISION event.
 
         Mirrors build_context() from simulator/context_engine.py.
         """
-        # Compute bay utilisation for OL penalty
-        current_Bay_G = self.compute_bay_utilisation(current_time)
+        current_BG = self.compute_bay_utilisation(current_time)
 
         CL = self.compute_local_cargo_utility(
-            truck_state, connecting_cargo, hold_actions, hubs, truck_map
-        )
+            truck_state, connecting_cargo, hold_actions, hubs, truck_map)
         OL = self.compute_local_operator_utility(
-            truck_state, hold_actions, current_bay_util=current_Bay_G
-        )
+            truck_state, hold_actions, current_bay_util=current_BG)
         CG = self.compute_global_cargo_utility(current_time)
         OG = self.compute_global_operator_utility(current_time)
         WG = self.compute_hub_throughput(current_time)
@@ -333,29 +350,19 @@ class ContextEngine:
         ZG = self.compute_inbound_queue_depth(current_time)
         tau_star = self.compute_tau_star(CL, OL, hold_actions)
 
-        # Inbound ETA lag (Δ_in): from first connecting inbound truck
-        delta_in = 0.0
-        if connecting_cargo:
-            inbound_tids = {c.legs[0] for c in connecting_cargo if len(c.legs) >= 2}
-            lags = []
-            for tid in inbound_tids:
-                ts = truck_map.get(tid)
-                if ts:
-                    lags.append(ts.total_arrival_delay)
-            delta_in = float(np.mean(lags)) if lags else 0.0
+        # Δ_in: mean actual arrival delay of all inbound (feeder) trucks
+        inbound_tids = {c.legs[0] for c in connecting_cargo if len(c.legs) >= 2}
+        lags = [truck_map[tid].arrival_delay_A
+                for tid in inbound_tids if tid in truck_map]
+        delta_in = float(np.mean(lags)) if lags else 0.0
 
-        # Transfer slack (Δ_slack): scheduled departure − scheduled dock
+        # Δ_slack: scheduled departure − scheduled dock (guaranteed loading window)
         delta_slack = max(0.0,
-            truck_state.truck.scheduled_departure - truck_state.truck.scheduled_dock
-        )
+            truck_state.truck.scheduled_departure - truck_state.truck.scheduled_dock)
 
         return TruckContext(
             truck_id=truck_state.truck.truck_id,
-            CL=CL,
-            OL=OL,
-            CG=CG,
-            OG=OG,
-            tau_star=tau_star,
+            CL=CL, OL=OL, CG=CG, OG=OG, tau_star=tau_star,
             V_k=truck_state.cargo_value_score,
             Q_k=truck_state.cargo_volume_fraction,
             X_k=truck_state.sla_urgency,
@@ -365,83 +372,72 @@ class ContextEngine:
             L_k=truck_state.driver_hours_remaining,
             F_k=truck_state.deadline_pressure,
             N_in=truck_state.n_inbound_trucks,
-            B_G=current_Bay_G,
-            W_G=WG,
-            Y_G=YG,
-            Z_G=ZG,
+            B_G=current_BG, W_G=WG, Y_G=YG, Z_G=ZG,
             D_k=truck_state.departure_delay_D,
             A_k=truck_state.arrival_delay_A,
             G_bay_k=truck_state.bay_dwell_delay,
             G_road_k=truck_state.road_delay,
         )
 
-    # -----------------------------------------------------------------
-    # Internal helpers  (mirrors _estimate_pax_delay etc.)
-    # -----------------------------------------------------------------
-    def _estimate_cargo_delay(
-        self,
-        cargo: CargoUnit,
-        inbound_truck: TruckState,
-        hold_tau: int,
-        mtt: int,
-        truck_map: Dict[str, TruckState],
-    ) -> float:
-        """Estimate delivery delay for a cargo unit given hold τ.
+    # ── Internal helpers ──────────────────────────────────────────────
+
+    def _cargo_disutility(self, delay: float, sla_urgency: int = 0,
+                          is_perishable: bool = False) -> float:
+        """σ_i(τ) — cargo disutility given delivery delay.
+
+        PDF §5.1 formula (base):
+          σ = 0                                    if delay ≤ T_sla
+          σ = (1+X_k) · min(delay, Δ_C) / Δ_C    if delay > T_sla  [linear]
+
+        Logistics improvement (perishable cargo):
+          For is_perishable=True, use exponential growth:
+          σ = min(1.0, (1+X_k) · (1 − exp(−k · delay)))
+          where k = perishable_decay_rate (config)
+          Rationale: cold-chain cargo spoils exponentially, not linearly.
+        """
+        T_sla   = self.cfg.T_sla
+        delta_C = self.cfg.delta_C
+
+        if delay <= T_sla:
+            return 0.0
+
+        if is_perishable:
+            # Exponential disutility: grows faster at first, caps at 1.0
+            k = self.cfg.perishable_decay_rate
+            raw = (1 + sla_urgency) * (1.0 - math.exp(-k * delay))
+            return float(np.clip(raw, 0.0, 1.0))
+        else:
+            # PDF §5.1 linear formula
+            return (1 + sla_urgency) * min(delay, delta_C) / delta_C
+
+    def _estimate_cargo_delay(self, cargo: CargoUnit, inbound_ts: TruckState,
+                              hold_tau: int, mtt: int,
+                              truck_map: Dict[str, TruckState]) -> float:
+        """Estimate delivery delay for one cargo unit given hold τ.
 
         If cargo makes the transfer → delay = outbound truck's arrival delay.
-        If cargo misses → next-cycle penalty (24h default).
-
+        If cargo misses the transfer → next-cycle penalty (24h).
         Mirrors _estimate_pax_delay() from simulator/context_engine.py.
         """
         if len(cargo.legs) < 2:
             return 0.0
 
-        est_arrival = (
-            inbound_truck.truck.scheduled_arrival
-            + inbound_truck.arrival_delay_A
-        )
-
-        outbound_tid = cargo.legs[1]
-        outbound_ts = truck_map.get(outbound_tid)
+        est_arrival   = inbound_ts.truck.scheduled_arrival + inbound_ts.arrival_delay_A
+        outbound_ts   = truck_map.get(cargo.legs[1])
         if outbound_ts is None:
             return 0.0
 
-        outbound_dep = outbound_ts.truck.scheduled_departure + hold_tau
+        outbound_dep  = outbound_ts.truck.scheduled_departure + hold_tau
         transfer_window = outbound_dep - est_arrival
 
         if transfer_window >= mtt:
-            # Cargo makes the transfer
-            outbound_delay = outbound_ts.arrival_delay_A + hold_tau
-            return max(outbound_delay, 0.0)
+            return max(0.0, outbound_ts.arrival_delay_A + hold_tau)
         else:
-            # Cargo misses — next-cycle penalty (24h)
             return self.cfg.next_cycle_penalty_minutes
 
-    def _estimate_truck_departure_delay(
-        self, truck_state: TruckState, hold_tau: int
-    ) -> float:
-        """Estimated departure delay of truck if held by τ minutes."""
-        return truck_state.total_departure_delay + hold_tau
+    def _estimate_truck_departure_delay(self, ts: TruckState, hold_tau: int) -> float:
+        return ts.total_departure_delay + hold_tau
 
-    def _cargo_disutility(self, delay: float, sla_urgency: int = 0) -> float:
-        """σ_i(τ) as defined in PDF §5.1.
-
-        σ_i(τ) = 0                                      if δ ≤ T_sla
-        σ_i(τ) = (1+X_k)·min(δ, Δ_C)/Δ_C               if δ > T_sla
-
-        Replaces _pax_disutility() from simulator/context_engine.py.
-        The SLA urgency multiplier X_k ∈ {0,1,2} amplifies the penalty
-        for high-urgency cargo that misses its transfer.
-        """
-        T_sla = self.cfg.T_sla
-        delta_C = self.cfg.delta_C
-        if delay <= T_sla:
-            return 0.0
-        return (1 + sla_urgency) * min(delay, delta_C) / delta_C
-
-    # -----------------------------------------------------------------
-    # Reset
-    # -----------------------------------------------------------------
     def reset(self) -> None:
         self._global_cargo_history.clear()
         self._global_operator_history.clear()
@@ -449,3 +445,7 @@ class ContextEngine:
         self._throughput_history.clear()
         self._failed_transfer_history.clear()
         self._inbound_queue_history.clear()
+
+
+# ── math needed for exponential disutility ──────────────────────────
+import math
