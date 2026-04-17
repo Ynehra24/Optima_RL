@@ -113,8 +113,9 @@ class A2CAgent:
     def greedy_action(self, state: np.ndarray) -> int:
         """
         Confident-greedy — used during evaluation.
-        Only picks a non-zero hold if agent assigns ≥30% probability to it.
-        Prevents 100%-hold collapse from pure argmax on a weak policy.
+        Picks the best non-zero hold if agent assigns ≥16% probability to it
+        (just above uniform 1/7≈14.3%). Prevents always returning 0 during
+        early training when the policy is nearly uniform.
         """
         probs, _ = self.network.forward(state)
         probs     = np.clip(probs, 1e-8, 1.0)
@@ -122,7 +123,7 @@ class A2CAgent:
         best      = int(np.argmax(probs))
         if best == 0:
             return 0
-        if probs[best] >= 0.30:
+        if probs[best] >= 0.16:
             return best
         return 0
 

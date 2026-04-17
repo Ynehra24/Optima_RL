@@ -280,29 +280,56 @@ class LogisticsEnvStub:
 
     def _compute_reward(self, action: int, hold_min: int):
         """
+        Discriminative reward — clear gradient toward tau*.
+
         R_T = β·R_L + (1-β)·R_G
         R_L = α·CL(τ) + (1-α)·OL(τ)
         R_G = α·CG   + (1-α)·OG − λ·BayCongestion
 
-        Bay congestion penalty mirrors the LogisticsRewardCalculator formula.
+        CL is the key learning signal:
+          - When there IS inbound delay (in_delay > 0.1) and tau* > 0:
+              CL = 0.88 − 0.28·|action − tau*|/(N-1)   → range [0.60, 0.88]
+          - When tau* = 0 (no hold needed):
+              CL = 0.88 − 0.12·action/(N-1)            → penalises unnecessary hold
+          - No inbound delay at all:
+              CL = 0.85 − 0.08·action/(N-1)            → mild hold penalty only
+        Noise: σ=0.02 (half of before) → signal-to-noise ~10x better.
         """
-        congestion = float(np.clip(self._BG - 0.60, 0, 1)) * (action / N_ACTIONS)
+        tau_star  = getattr(self, "_last_tau_star",    0)
+        in_delay  = getattr(self, "_last_in_delay_n",  0.0)
+        SLA       = getattr(self, "_last_sla_urgency", 0.0)
+        BG        = self._BG
         lambda_bay = 0.30
+        congestion = float(np.clip(BG - 0.60, 0, 1)) * (action / N_ACTIONS)
 
-        CL_val = float(np.clip(
-            0.75 + 0.03 * (action / N_ACTIONS) * (1 - self._BG)
-            + self.rng.normal(0, 0.04), 0, 1))
+        # ── Cargo Utility (CL): main learning signal ───────────────────────
+        if in_delay > 0.1 and tau_star > 0:
+            dist     = abs(action - tau_star) / (N_ACTIONS - 1)   # 0=perfect, 1=worst
+            base_CL  = 0.88 - 0.28 * dist
+            # SLA urgency amplifies the benefit of covering the delay
+            base_CL  = base_CL + 0.05 * SLA * (1.0 - dist)
+        elif tau_star == 0 and in_delay <= 0.1:
+            # No feeder delay — holding wastes time and deck space
+            base_CL  = 0.88 - 0.12 * (action / (N_ACTIONS - 1))
+        else:
+            # Mild inbound delay but tau*=0 or edge case
+            base_CL  = 0.85 - 0.10 * (action / (N_ACTIONS - 1))
+
+        CL_val = float(np.clip(base_CL + self.rng.normal(0, 0.02), 0.0, 1.0))
+
+        # ── Operator Utility (OL): penalises departure delay ────────────────
         OL_val = float(np.clip(
-            0.90 - 0.09 * (action / N_ACTIONS) - congestion * 0.3
-            + self.rng.normal(0, 0.03), 0, 1))
+            0.90 - 0.12 * (action / (N_ACTIONS - 1)) - congestion * 0.4
+            + self.rng.normal(0, 0.02), 0.0, 1.0))
 
-        CG_val = float(np.clip(self._CG + self.rng.normal(0, 0.02), 0, 1))
+        # ── Global utilities ─────────────────────────────────────────
+        CG_val = float(np.clip(self._CG + self.rng.normal(0, 0.02), 0.0, 1.0))
         OG_val = float(np.clip(
-            self._OG - 0.01 * action + self.rng.normal(0, 0.02), 0, 1))
+            self._OG - 0.01 * action + self.rng.normal(0, 0.02), 0.0, 1.0))
 
-        R_L = self.alpha * CL_val + (1 - self.alpha) * OL_val
-        R_G = self.alpha * CG_val + (1 - self.alpha) * OG_val - lambda_bay * congestion
-        reward = self.beta * R_L + (1 - self.beta) * R_G
+        R_L    = self.alpha * CL_val + (1 - self.alpha) * OL_val
+        R_G    = self.alpha * CG_val + (1 - self.alpha) * OG_val - lambda_bay * congestion
+        reward = self.beta  * R_L    + (1 - self.beta)  * R_G
 
         info = {
             "CL": CL_val, "OL": OL_val,
@@ -310,10 +337,10 @@ class LogisticsEnvStub:
             "R_L": R_L, "R_G": R_G,
             "hold_min": hold_min,
             "bay_congestion_penalty": congestion,
-            # Keys used by _update_episode_metrics
-            "tau_star":           getattr(self, "_last_tau_star",     0) / max(N_ACTIONS - 1, 1),
-            "in_delay_normalised": getattr(self, "_last_in_delay_n",  0.0),
-            "SLA_urgency":         getattr(self, "_last_sla_urgency", 0.0),
+            # Keys for _update_episode_metrics
+            "tau_star":           tau_star / max(N_ACTIONS - 1, 1),
+            "in_delay_normalised": in_delay,
+            "SLA_urgency":         SLA,
         }
         return float(reward), info
 

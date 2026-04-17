@@ -38,9 +38,10 @@ from agents.a2c import A2CAgent
 DEFAULT_CONFIG = {
     "n_train_episodes": 25,
     "n_test_episodes":  5,
-    "lr":               3e-4,
-    "gamma":            0.8,
-    "batch_size":       32,
+    "lr":               8e-4,    # faster: was 3e-4
+    "gamma":            0.85,    # slightly more far-sighted
+    "batch_size":       16,      # more updates per episode: was 32
+    "entropy_coef":     0.01,    # let policy commit: was 0.05
     "alpha":            ALPHA,
     "beta":             BETA,
     "log_every":        200,
@@ -457,6 +458,7 @@ def main():
         lr           = cfg["lr"],
         gamma        = cfg["gamma"],
         batch_size   = cfg["batch_size"],
+        entropy_coef = cfg.get("entropy_coef", 0.01),
         seed         = cfg["seed"],
     )
     train_result = train(agent, env, cfg["n_train_episodes"], cfg)
