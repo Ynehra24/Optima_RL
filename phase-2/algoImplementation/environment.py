@@ -79,6 +79,16 @@ class LogisticsEnvStub:
         self._YG    = 0.10   # failed transfer rate
         self._ZG    = 0.15   # inbound queue depth
 
+        # Episode-level counters (mirrors MetricsTracker)
+        self._ep_total        = 0
+        self._ep_holds        = 0
+        self._ep_failed       = 0
+        self._ep_successful   = 0
+        self._ep_ontime       = 0
+        self._ep_priority_fail = 0
+        self._ep_bay_util_sum = 0.0
+        self._ep_delivery_delays: list = []
+
     # ── Public interface ───────────────────────────────────────────────────────
 
     def reset(self) -> np.ndarray:
@@ -87,6 +97,15 @@ class LogisticsEnvStub:
         self._CG = 0.80; self._OG = 0.75
         self._BG = 0.40; self._WG = 0.85
         self._YG = 0.10; self._ZG = 0.15
+        # Reset episode counters
+        self._ep_total        = 0
+        self._ep_holds        = 0
+        self._ep_failed       = 0
+        self._ep_successful   = 0
+        self._ep_ontime       = 0
+        self._ep_priority_fail = 0
+        self._ep_bay_util_sum = 0.0
+        self._ep_delivery_delays = []
         return self._make_state()
 
     def step(self, action: int):
@@ -94,10 +113,18 @@ class LogisticsEnvStub:
         hold_min = HOLD_DURATIONS[action]
 
         reward, info = self._compute_reward(action, hold_min)
+        self._update_episode_metrics(action, info)
         self._update_global_state(hold_min)
 
         self.step_count += 1
         done = self.step_count >= EPISODE_LENGTH
+
+        # Enrich info with logistics keys so training log shows real numbers
+        summary = self.metrics_summary()
+        info["failed_transfers"]    = summary["failed_transfers"]
+        info["successful_transfers"] = summary["successful_transfers"]
+        info["schedule_OTP_%"]      = summary["schedule_OTP_%"]
+        info["avg_bay_utilisation_%"] = summary["avg_bay_utilisation_%"]
 
         next_state = self._make_state()
         return next_state, reward, done, info
@@ -109,6 +136,68 @@ class LogisticsEnvStub:
     @property
     def action_dim(self) -> int:
         return N_ACTIONS
+
+    def metrics_summary(self) -> dict:
+        """Mirrors MetricsTracker.summary() key names exactly."""
+        total = max(self._ep_total, 1)
+        conn  = max(self._ep_failed + self._ep_successful, 1)
+        otp   = 100.0 * self._ep_ontime / total
+        fail_pct = 100.0 * self._ep_failed / conn
+        avg_dly  = (float(np.mean(self._ep_delivery_delays))
+                    if self._ep_delivery_delays else 0.0)
+        avg_bay  = 100.0 * self._ep_bay_util_sum / total
+        return {
+            "schedule_OTP_%":          round(otp, 2),
+            "failed_transfer_%":       round(fail_pct, 2),
+            "avg_delivery_delay_min":  round(avg_dly, 2),
+            "avg_bay_utilisation_%":   round(avg_bay, 2),
+            "total_trucks":            self._ep_total,
+            "departed_trucks":         self._ep_total,
+            "ontime_departures":       self._ep_ontime,
+            "avg_departure_delay_min": round(float(np.mean([HOLD_DURATIONS[0]] * total)), 2),
+            "failed_transfers":        self._ep_failed,
+            "successful_transfers":    self._ep_successful,
+            "priority_failed":         self._ep_priority_fail,
+            "avg_hold_min":            round(5.0 * self._ep_holds / total, 2),
+            # OTP as fraction for compatibility
+            "OTP":                     round(otp, 2),
+        }
+
+    # ── Episode metric tracking ───────────────────────────────────────────────
+
+    def _update_episode_metrics(self, action: int, info: dict):
+        """Update per-episode counters after each truck decision."""
+        self._ep_total += 1
+        if action > 0:
+            self._ep_holds += 1
+
+        # OTP: truck departs on time if hold ≤ 10 min (index ≤ 2)
+        if action <= 2:
+            self._ep_ontime += 1
+
+        # Simulate transfer outcome:
+        # Under-holding when there's inbound cargo at risk → failure
+        # Uses CL values from info: if CL is high for a higher hold, agent under-held
+        tau_star_idx = round(info.get("tau_star", 0) * (N_ACTIONS - 1))
+        in_delay     = info.get("in_delay_normalised", 0.0)
+        if in_delay > 0.1 and action < tau_star_idx:
+            # Under-holding with meaningful incoming delay → simulate failure
+            gap         = (tau_star_idx - action) / N_ACTIONS
+            fail_prob   = gap * in_delay * 1.5
+            is_priority = info.get("SLA_urgency", 0.0) >= 0.8
+            if self.rng.random() < fail_prob:
+                self._ep_failed += 1
+                delay = float((tau_star_idx - action) * 5 + self.rng.uniform(5, 30))
+                self._ep_delivery_delays.append(delay)
+                if is_priority:
+                    self._ep_priority_fail += 1
+            else:
+                self._ep_successful += 1
+        else:
+            self._ep_successful += 1
+
+        # Bay utilisation sample
+        self._ep_bay_util_sum += float(np.clip(self._BG + self.rng.normal(0, 0.03), 0, 1))
 
     # ── State builder ──────────────────────────────────────────────────────────
 
@@ -156,6 +245,10 @@ class LogisticsEnvStub:
         local_score  = self.alpha * state[0:7] + (1 - self.alpha) * state[7:14]
         tau_star_idx = int(np.argmax(local_score))
         state[16]    = tau_star_idx / (N_ACTIONS - 1)
+        # Store for episode tracking
+        self._last_tau_star     = tau_star_idx
+        self._last_sla_urgency  = X_k / 2.0
+        self._last_in_delay_n   = float(np.clip(incoming_delay / 30.0, 0, 1))
 
         # Logistics-specific scalars [17:26]
         state[17] = V_k
@@ -217,6 +310,10 @@ class LogisticsEnvStub:
             "R_L": R_L, "R_G": R_G,
             "hold_min": hold_min,
             "bay_congestion_penalty": congestion,
+            # Keys used by _update_episode_metrics
+            "tau_star":           getattr(self, "_last_tau_star",     0) / max(N_ACTIONS - 1, 1),
+            "in_delay_normalised": getattr(self, "_last_in_delay_n",  0.0),
+            "SLA_urgency":         getattr(self, "_last_sla_urgency", 0.0),
         }
         return float(reward), info
 

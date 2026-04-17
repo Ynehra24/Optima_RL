@@ -136,8 +136,10 @@ def train(agent: A2CAgent, env, n_eps: int, cfg: dict) -> dict:
         ep_rewards.append(mean)
 
         # Show logistics-specific metrics if available
-        failed = info.get("failed_transfers", info.get("missed_connections", "?"))
-        otp    = info.get("schedule_OTP_%", info.get("OTP", "?"))
+        failed = info.get("failed_transfers",
+                  info.get("missed_connections", 0))
+        otp    = info.get("schedule_OTP_%",
+                  info.get("OTP", 0.0))
         print(f"  Episode {ep+1:3d} done | Steps: {eps:5d} | "
               f"Mean reward: {mean:.4f} | "
               f"Failed transfers: {failed} | "
@@ -186,7 +188,12 @@ def _run_one(env, action_fn) -> dict:
     if hasattr(env, "metrics_summary"):
         summary = env.metrics_summary()
     else:
-        summary = dict(info)
+        summary = {}
+
+    # Overlay live info values, defaulting to 0 for all missing numeric keys
+    for k, v in info.items():
+        if k not in summary:
+            summary[k] = v
 
     summary["avg_reward"]  = float(np.mean(rewards))
     summary["holds_pct"]   = 100.0 * holds / max(steps, 1)
@@ -203,13 +210,13 @@ def _aggregate(summaries: list, name: str) -> dict:
     """Average a list of episode summaries and print the result."""
     out = {}
     for k in summaries[0]:
-        try:    out[k] = float(np.mean([s[k] for s in summaries]))
+        try:    out[k] = float(np.mean([s.get(k, 0) for s in summaries]))
         except: out[k] = summaries[0][k]
 
     failed   = out.get("failed_transfers", out.get("missed_connections", 0))
     fail_pct = out.get("failed_transfer_%", 0.0)
     print(f"  {DISPLAY.get(name, name.upper()):<12} | "
-          f"OTP: {out.get('OTP', 0):5.1f}%  |  "
+          f"OTP: {out.get('OTP', out.get('schedule_OTP_%', 0)):5.1f}%  |  "
           f"Failed: {failed:6.0f} ({fail_pct:.1f}%)  |  "
           f"Arr: {out.get('avg_delivery_delay_min', 0):5.2f}m  |  "
           f"BayUtil: {out.get('avg_bay_utilisation_%', 0):4.1f}%  |  "
@@ -396,14 +403,19 @@ def print_table(all_results: dict, rl_results: dict, bl_results: dict):
     print(f"  {'Method':<8} {'vs No-Hold':>12} {'vs Heur-15':>12} {'vs Heur-30':>12}")
     print("  " + "-"*47)
     if "a2c" in rl_results:
-        a = rl_results["a2c"]
+        a  = rl_results["a2c"]
         af = a.get("failed_transfers", a.get("missed_connections", 0))
+        row = "  A2C     "
         for bname in ["no_hold", "heuristic_15", "heuristic_30"]:
             if bname in bl_results:
-                b  = bl_results[bname]
-                bf = b.get("failed_transfers", b.get("missed_connections", 1))
-                red = (bf - af) / max(bf, 1) * 100
-                print(f"  A2C      {red:>10.1f}%  ({bname})")
+                b   = bl_results[bname]
+                bf  = b.get("failed_transfers", b.get("missed_connections", 0))
+                if bf > 0:
+                    red = (bf - af) / bf * 100
+                    row += f"{red:>10.1f}%  "
+                else:
+                    row += f"{'N/A':>10}   "
+        print(row)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
