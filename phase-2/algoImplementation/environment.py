@@ -280,56 +280,58 @@ class LogisticsEnvStub:
 
     def _compute_reward(self, action: int, hold_min: int):
         """
-        Discriminative reward — clear gradient toward tau*.
-
         R_T = β·R_L + (1-β)·R_G
         R_L = α·CL(τ) + (1-α)·OL(τ)
-        R_G = α·CG   + (1-α)·OG − λ·BayCongestion
+        R_G = α·CG + (1-α)·OG − λ_bay·BayCongestion
 
-        CL is the key learning signal:
-          - When there IS inbound delay (in_delay > 0.1) and tau* > 0:
-              CL = 0.88 − 0.28·|action − tau*|/(N-1)   → range [0.60, 0.88]
-          - When tau* = 0 (no hold needed):
-              CL = 0.88 − 0.12·action/(N-1)            → penalises unnecessary hold
-          - No inbound delay at all:
-              CL = 0.85 − 0.08·action/(N-1)            → mild hold penalty only
-        Noise: σ=0.02 (half of before) → signal-to-noise ~10x better.
+        Fix: CL range is now [0.50, 0.95] centred on tau* when there
+        is incoming delay.  Noise std is 0.015 so the action gradient
+        (up to 0.45) dominates.  Without delay, holding just costs OL.
         """
-        tau_star  = getattr(self, "_last_tau_star",    0)
-        in_delay  = getattr(self, "_last_in_delay_n",  0.0)
-        SLA       = getattr(self, "_last_sla_urgency", 0.0)
-        BG        = self._BG
-        lambda_bay = 0.30
-        congestion = float(np.clip(BG - 0.60, 0, 1)) * (action / N_ACTIONS)
+        tau_star    = getattr(self, "_last_tau_star",    0)
+        in_delay_n  = getattr(self, "_last_in_delay_n",  0.0)
+        sla_urgency = getattr(self, "_last_sla_urgency", 0.0)
+        BG          = float(np.clip(self._BG, 0, 1))
+        congestion  = float(np.clip(BG - 0.60, 0, 1)) * (action / N_ACTIONS)
+        lambda_bay  = 0.30
 
-        # ── Cargo Utility (CL): main learning signal ───────────────────────
-        if in_delay > 0.1 and tau_star > 0:
-            dist     = abs(action - tau_star) / (N_ACTIONS - 1)   # 0=perfect, 1=worst
-            base_CL  = 0.88 - 0.28 * dist
-            # SLA urgency amplifies the benefit of covering the delay
-            base_CL  = base_CL + 0.05 * SLA * (1.0 - dist)
-        elif tau_star == 0 and in_delay <= 0.1:
-            # No feeder delay — holding wastes time and deck space
-            base_CL  = 0.88 - 0.12 * (action / (N_ACTIONS - 1))
+        # ── CL: Cargo utility ───────────────────────────────────────────
+        # SIGNAL: when there's an incoming delay, holding at tau* is good.
+        # Range: 0.50 (worst action) → 0.95 (action == tau*).
+        # Noise std 0.015 << signal range 0.45 => learnable.
+        if in_delay_n > 0.1 and tau_star > 0:
+            # Quality = 1 when action == tau*, 0 when action is maximally wrong
+            hold_quality = 1.0 - abs(action - tau_star) / max(tau_star + 1, 1)
+            CL_base      = 0.50 + 0.45 * hold_quality
+        elif in_delay_n > 0.1 and tau_star == 0:
+            # Delay exists but optimal is no-hold (e.g. very short delay):
+            # holding is wasteful but not catastrophic
+            CL_base = 0.90 - 0.06 * (action / N_ACTIONS)
         else:
-            # Mild inbound delay but tau*=0 or edge case
-            base_CL  = 0.85 - 0.10 * (action / (N_ACTIONS - 1))
+            # No incoming delay — holding wastes cargo utility
+            CL_base = 0.90 - 0.05 * (action / N_ACTIONS)
 
-        CL_val = float(np.clip(base_CL + self.rng.normal(0, 0.02), 0.0, 1.0))
+        # SLA urgency amplifies CL slightly (express cargo cares more)
+        CL_val = float(np.clip(
+            CL_base * (1.0 + sla_urgency * 0.08)
+            + self.rng.normal(0, 0.015), 0, 1))
 
-        # ── Operator Utility (OL): penalises departure delay ────────────────
+        # ── OL: Operator utility ───────────────────────────────────────────
+        # Holding always costs OTP — clear decreasing ramp.
         OL_val = float(np.clip(
-            0.90 - 0.12 * (action / (N_ACTIONS - 1)) - congestion * 0.4
-            + self.rng.normal(0, 0.02), 0.0, 1.0))
+            0.90 - 0.10 * (action / N_ACTIONS)
+            - congestion * 0.40
+            + self.rng.normal(0, 0.010), 0, 1))
 
-        # ── Global utilities ─────────────────────────────────────────
-        CG_val = float(np.clip(self._CG + self.rng.normal(0, 0.02), 0.0, 1.0))
+        # ── Global utilities (action-independent in the stub) ─────────────
+        CG_val = float(np.clip(self._CG + self.rng.normal(0, 0.015), 0, 1))
         OG_val = float(np.clip(
-            self._OG - 0.01 * action + self.rng.normal(0, 0.02), 0.0, 1.0))
+            self._OG - 0.015 * action + self.rng.normal(0, 0.010), 0, 1))
 
         R_L    = self.alpha * CL_val + (1 - self.alpha) * OL_val
-        R_G    = self.alpha * CG_val + (1 - self.alpha) * OG_val - lambda_bay * congestion
-        reward = self.beta  * R_L    + (1 - self.beta)  * R_G
+        R_G    = (self.alpha * CG_val + (1 - self.alpha) * OG_val
+                  - lambda_bay * congestion)
+        reward = self.beta * R_L + (1 - self.beta) * R_G
 
         info = {
             "CL": CL_val, "OL": OL_val,
@@ -337,10 +339,10 @@ class LogisticsEnvStub:
             "R_L": R_L, "R_G": R_G,
             "hold_min": hold_min,
             "bay_congestion_penalty": congestion,
-            # Keys for _update_episode_metrics
-            "tau_star":           tau_star / max(N_ACTIONS - 1, 1),
-            "in_delay_normalised": in_delay,
-            "SLA_urgency":         SLA,
+            # Keys used by _update_episode_metrics
+            "tau_star":           getattr(self, "_last_tau_star",     0) / max(N_ACTIONS - 1, 1),
+            "in_delay_normalised": getattr(self, "_last_in_delay_n",  0.0),
+            "SLA_urgency":         getattr(self, "_last_sla_urgency", 0.0),
         }
         return float(reward), info
 

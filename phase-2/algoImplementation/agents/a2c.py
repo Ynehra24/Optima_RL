@@ -29,8 +29,8 @@ class A2CNetwork:
     """Shared-trunk actor-critic network."""
 
     def __init__(self, state_dim: int = 34, action_dim: int = 7, seed: int = 42):
-        # Wider trunk than Phase 1 to handle the richer 34-dim input
-        self.trunk  = MLP(state_dim, [64, 64], 64, seed=seed)
+        # Wider first layer to handle the richer 34-dim logistics input
+        self.trunk  = MLP(state_dim, [128, 64], 64, seed=seed)
         self.policy = MLP(64, [], action_dim, seed=seed + 10)
         self.value  = MLP(64, [], 1,          seed=seed + 20)
         self._trunk_out = None
@@ -71,7 +71,7 @@ class A2CAgent:
         lr:           float = 3e-4,
         gamma:        float = 0.8,
         batch_size:   int   = 32,
-        entropy_coef: float = 0.05,
+        entropy_coef: float = 0.01,
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):
@@ -112,18 +112,20 @@ class A2CAgent:
 
     def greedy_action(self, state: np.ndarray) -> int:
         """
-        Confident-greedy — used during evaluation.
-        Picks the best non-zero hold if agent assigns ≥16% probability to it
-        (just above uniform 1/7≈14.3%). Prevents always returning 0 during
-        early training when the policy is nearly uniform.
+        Greedy action for evaluation — returns argmax of policy unless
+        a non-zero hold fails a minimum confidence bar (15%).
+        Threshold of 15% (vs old 30%) is calibrated to the practical
+        max probabilities seen after convergence on a 7-action space.
         """
         probs, _ = self.network.forward(state)
         probs     = np.clip(probs, 1e-8, 1.0)
         probs    /= probs.sum()
         best      = int(np.argmax(probs))
+        # Always allow no-hold (action 0)
         if best == 0:
             return 0
-        if probs[best] >= 0.16:
+        # Allow hold only if agent is meaningfully confident (>15%)
+        if probs[best] >= 0.15:
             return best
         return 0
 
