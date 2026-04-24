@@ -1,22 +1,20 @@
 """
-agents/a2c.py — Phase 2 Logistics HNH
-======================================
-Advantage Actor-Critic for the Cross-Docking Hold-or-Not-Hold problem.
+agents/a2c.py — Advantage Actor-Critic for Phase 2 Logistics HNH
+=================================================================
 
-Identical algorithm to phase-1/algoImplementation/agents/a2c.py.
-Only change: default state_dim = 34 (logistics 34-dim state vector
-instead of aviation 17-dim).
+Key differences from Phase 1:
+  - state_dim = 42 (34 local + 8 network context for multi-hub)
+  - Wider trunk: 42 → 64 → 64  (was 17 → 17)
+    The extra width is needed to learn from the 17 new logistics features
+    (bay utilization, cargo value, SLA urgency, perishability, etc.)
+    plus 8 downstream network context features (cascade awareness)
+  - Same A2C update math — advantage, policy gradient, entropy bonus
+  - Same Adam optimiser, same hyperparameters (paper §6.2)
 
-Architecture:
-  shared trunk  : state_dim → [64, 64] → 64
-  policy head   : 64 → action_dim      (softmax → discrete distribution)
-  value  head   : 64 → 1               (scalar baseline)
-
-Update rule:
-  policy loss = -log π(a|s) · A(s,a)  − entropy_coef · H(π)
-  value  loss = value_coef  · (V(s) − R)²
-  A(s,a)      = R − V(s)   (normalised per batch)
-  R           = discounted returns (γ-weighted, bootstrapped)
+Network architecture:
+  trunk  : MLP(42 → [64, 64] → 64)   shared feature extractor
+  policy : MLP(64 → [] → 7)           logits → softmax → action probs
+  value  : MLP(64 → [] → 1)           state value V(s)
 """
 
 import numpy as np
@@ -24,18 +22,35 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.networks import MLP, Adam, relu, softmax
 
+# ── Phase 2 network dimensions ─────────────────────────────────────────────────
+STATE_DIM  = 42   # 34 local + 8 network context (multi-hub) | set to 34 for single-hub
+ACTION_DIM = 7    # hold ∈ {0,5,10,15,20,25,30} min
+TRUNK_OUT  = 64   # shared trunk output dim
+HIDDEN     = [64, 64]   # two hidden layers for richer representation
+
 
 class A2CNetwork:
-    """Shared-trunk actor-critic network."""
+    """Shared-trunk Actor-Critic network for the 42-dim logistics state."""
 
-    def __init__(self, state_dim: int = 34, action_dim: int = 7, seed: int = 42):
-        # Wider first layer to handle the richer 34-dim logistics input
-        self.trunk  = MLP(state_dim, [128, 64], 64, seed=seed)
-        self.policy = MLP(64, [], action_dim, seed=seed + 10)
-        self.value  = MLP(64, [], 1,          seed=seed + 20)
+    def __init__(self, state_dim: int = STATE_DIM, action_dim: int = ACTION_DIM,
+                 seed: int = 42):
+        # Shared trunk: learns logistics-aware features
+        self.trunk  = MLP(state_dim, HIDDEN, TRUNK_OUT, seed=seed)
+        # Policy head: maps trunk features → action logits
+        self.policy = MLP(TRUNK_OUT, [], action_dim, seed=seed + 10)
+        # Value head: maps trunk features → scalar state value
+        self.value  = MLP(TRUNK_OUT, [], 1, seed=seed + 20)
         self._trunk_out = None
 
     def forward(self, state: np.ndarray):
+        """Forward pass through trunk → policy + value heads.
+
+        Args:
+            state: shape (34,) normalized logistics state vector
+
+        Returns:
+            (probs, value): action probability vector and scalar value
+        """
         trunk_raw       = self.trunk.forward(state)
         self._trunk_out = relu(trunk_raw)
         policy_logits   = self.policy.forward(self._trunk_out)
@@ -54,24 +69,20 @@ class A2CNetwork:
 
 
 class A2CAgent:
-    """
-    A2C agent for logistics Hold-or-Not-Hold.
+    """Advantage Actor-Critic agent for the Phase 2 logistics HNH problem.
 
-    API (identical to Phase 1):
-        action, value = agent.select_action(state)   # training (stochastic)
-        action        = agent.greedy_action(state)   # evaluation (deterministic)
-        agent.store(state, action, reward, value, done)
-        agent.update(last_value=0.0)
+    Identical update math to Phase 1 A2C — only the network is wider.
+    This makes the comparison between Phase 1 and Phase 2 directly fair.
     """
 
     def __init__(
         self,
-        state_dim:    int   = 34,
-        action_dim:   int   = 7,
-        lr:           float = 3e-4,
+        state_dim:    int   = STATE_DIM,
+        action_dim:   int   = ACTION_DIM,
+        lr:           float = 0.0001,
         gamma:        float = 0.8,
         batch_size:   int   = 32,
-        entropy_coef: float = 0.01,
+        entropy_coef: float = 0.05,
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):
@@ -92,7 +103,7 @@ class A2CAgent:
         self._values  = []
         self._dones   = []
 
-        # Logging
+        # Training history
         self.losses        = []
         self.policy_losses = []
         self.value_losses  = []
@@ -100,10 +111,12 @@ class A2CAgent:
         self.q_values      = []
         self.rewards_log   = []
 
-    # ── Action selection ──────────────────────────────────────────────────────
-
     def select_action(self, state: np.ndarray):
-        """Stochastic — used during training."""
+        """Stochastic action sampling — used during training.
+
+        Returns:
+            (action, value): int action index and float state value estimate
+        """
         probs, value = self.network.forward(state)
         probs        = np.clip(probs, 1e-8, 1.0)
         probs       /= probs.sum()
@@ -111,27 +124,22 @@ class A2CAgent:
         return action, float(value)
 
     def greedy_action(self, state: np.ndarray) -> int:
-        """
-        Greedy action for evaluation — returns argmax of policy unless
-        a non-zero hold fails a minimum confidence bar (15%).
-        Threshold of 15% (vs old 30%) is calibrated to the practical
-        max probabilities seen after convergence on a 7-action space.
+        """Confident greedy action — used during evaluation.
+
+        Only holds if agent assigns ≥18% probability to that action
+        (just above uniform 1/7 ≈ 14.3%).
+        Prevents 100%-hold collapse from pure argmax on weak policy.
         """
         probs, _ = self.network.forward(state)
         probs     = np.clip(probs, 1e-8, 1.0)
         probs    /= probs.sum()
         best      = int(np.argmax(probs))
-        # Always allow no-hold (action 0)
         if best == 0:
             return 0
-        # Allow hold only if agent is meaningfully confident (>15%)
-        if probs[best] >= 0.15:
-            return best
-        return 0
-
-    # ── Buffer ────────────────────────────────────────────────────────────────
+        return best if probs[best] >= 0.18 else 0
 
     def store(self, state, action, reward, value, done):
+        """Store one transition in the rollout buffer."""
         self._states.append(state.copy())
         self._actions.append(action)
         self._rewards.append(reward)
@@ -139,10 +147,18 @@ class A2CAgent:
         self._dones.append(done)
         self.rewards_log.append(reward)
 
-    # ── Update ────────────────────────────────────────────────────────────────
-
     def update(self, last_value: float = 0.0):
-        """Run one A2C gradient update over the buffered rollout."""
+        """Update policy and value using accumulated rollout buffer.
+
+        Uses discounted returns and normalized advantages.
+        Called every batch_size steps or at episode end.
+
+        Args:
+            last_value: Bootstrap value for the last state (0 if terminal)
+
+        Returns:
+            Combined loss (float) or None if buffer too small
+        """
         if len(self._states) < self.batch_size and not self._dones[-1]:
             return None
 
@@ -153,15 +169,15 @@ class A2CAgent:
         values    = np.array(self._values,  dtype=np.float32)
         dones     = np.array(self._dones,   dtype=np.float32)
 
-        # ── Discounted returns (bootstrapped) ─────────────────────────────────
+        # ── Discounted returns (Monte Carlo) ──────────────────────────
         returns = np.zeros(n, dtype=np.float32)
         R = last_value
         for t in reversed(range(n)):
             R          = rewards[t] + self.gamma * R * (1 - dones[t])
             returns[t] = R
-        returns = np.clip(returns, -10.0, 10.0)
+        returns = np.clip(returns, -10.0, 10.0)  # prevent gradient explosion
 
-        # ── Normalised advantages ─────────────────────────────────────────────
+        # ── Normalized advantages ─────────────────────────────────────
         advantages = returns - values
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -178,18 +194,21 @@ class A2CAgent:
             entropy  = -np.sum(probs_clipped * np.log(probs_clipped))
             adv      = float(advantages[i])
             ret      = float(returns[i])
-            p_loss   = -log_prob * adv
-            v_error  = value_pred - ret
-            v_loss   = v_error ** 2
 
-            # ── Policy gradient + entropy bonus ───────────────────────────────
-            one_hot = np.zeros(self.action_dim, dtype=np.float32)
+            # Policy gradient loss: -log_prob × advantage
+            p_loss  = -log_prob * adv
+            # Value MSE loss
+            v_error = value_pred - ret
+            v_loss  = v_error ** 2
+
+            # Backprop — policy head
+            one_hot      = np.zeros(self.action_dim, dtype=np.float32)
             one_hot[actions[i]] = 1.0
             grad_policy  = -adv * (one_hot - probs_clipped) / n
             grad_entropy = self.entropy_coef * (np.log(probs_clipped) + 1) / n
             self.network.policy.backward(grad_policy + grad_entropy)
 
-            # ── Value gradient ────────────────────────────────────────────────
+            # Backprop — value head
             grad_value = np.array([2 * self.value_coef * v_error / n])
             self.network.value.backward(grad_value)
 
@@ -197,6 +216,7 @@ class A2CAgent:
             total_value_loss  += float(v_loss)
             total_entropy     += float(entropy)
 
+        # Adam step on all parameters
         self.optimiser.step(self.network.params, self.network.grads)
 
         avg_loss = total_policy_loss / n + self.value_coef * total_value_loss / n
@@ -206,6 +226,7 @@ class A2CAgent:
         self.entropies.append(total_entropy / n)
         self.q_values.append(float(np.mean(values)))
 
+        # Clear rollout buffer
         self._states.clear()
         self._actions.clear()
         self._rewards.clear()
@@ -214,13 +235,11 @@ class A2CAgent:
 
         return avg_loss
 
-    # ── Metrics ───────────────────────────────────────────────────────────────
-
     def get_metrics(self) -> dict:
         w = 1000
         return {
             "avg_reward_1k":  float(np.mean(self.rewards_log[-w:])) if self.rewards_log else 0.0,
-            "avg_loss_1k":    float(np.mean(self.losses[-w:]))      if self.losses else 0.0,
-            "avg_value_1k":   float(np.mean(self.q_values[-w:]))    if self.q_values else 0.0,
-            "avg_entropy_1k": float(np.mean(self.entropies[-w:]))   if self.entropies else 0.0,
+            "avg_loss_1k":    float(np.mean(self.losses[-w:]))      if self.losses      else 0.0,
+            "avg_value_1k":   float(np.mean(self.q_values[-w:]))    if self.q_values    else 0.0,
+            "avg_entropy_1k": float(np.mean(self.entropies[-w:]))   if self.entropies   else 0.0,
         }

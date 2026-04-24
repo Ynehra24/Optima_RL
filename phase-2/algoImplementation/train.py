@@ -1,21 +1,14 @@
 """
-train.py — Phase 2 Logistics HNH
-==================================
-"To hold or not to hold?" — Cross-Docking logistics extension.
+train.py — Phase 2 Logistics Hold-or-Not-Hold RL Training
+==========================================================
 
-Trains A2C on the 34-dim logistics state vector.
-Mirrors phase-1/algoImplementation/train.py in structure.
-
-Produces:
-  Figure 6 equivalent — Failed transfers + Schedule OTP per method
-  Figure 7 equivalent — RL training metrics (reward, value, loss)
-  Figure 8 equivalent — α/β tunability sweep (A2C)
+Trains and evaluates A2C, DQN, and AC on the LogisticsEnv.
+Produces logistics-specific metrics and plots analogous to Phase 1 figures.
 
 Usage:
-  python train.py                            # full run, stub env
-  python train.py --algo a2c --episodes 5   # quick A2C test
-  python train.py --no-plots --no-sweep     # headless / CI
-  python train.py --use-real-sim            # real CrossDockSimulator
+    python train.py                  # train all algorithms
+    python train.py --algo a2c       # train A2C only
+    python train.py --episodes 10    # quick run
 """
 
 import argparse, json, os, sys, time, pickle
@@ -23,130 +16,147 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ── Path setup ─────────────────────────────────────────────────────────────────
-_here = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _here)
+# ── Paths ──────────────────────────────────────────────────────────────────────
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.join(_HERE, ".."))   # phase-2/
 
-from environment import (
-    build_env, ctx2state,
-    STATE_DIM, N_ACTIONS, HOLD_DURATIONS,
-    ALPHA, BETA, EPISODE_LENGTH,
-)
+from simulator.config       import SimConfig
+from simulator.logistics_env import LogisticsEnv
+from simulator.multi_hub_env import MultiHubLogisticsEnv
 from agents.a2c import A2CAgent
+from agents.dqn import DQNAgent
+from agents.ac  import ACAgent
 
-# ── Constants (paper §6.2 — logistics adaptation) ──────────────────────────────
+RESULTS_DIR = os.path.join(_HERE, "results")
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+# ── Hyperparameters (paper §6.2 values) ───────────────────────────────────────
 DEFAULT_CONFIG = {
     "n_train_episodes": 25,
     "n_test_episodes":  5,
-    "lr":               8e-4,    # faster: was 3e-4
-    "gamma":            0.85,    # slightly more far-sighted
-    "batch_size":       16,      # more updates per episode: was 32
-    "entropy_coef":     0.01,    # let policy commit: was 0.05
-    "alpha":            ALPHA,
-    "beta":             BETA,
+    "lr":               0.0001,
+    "gamma":            0.8,
+    "batch_size":       32,
+    "alpha":            0.50,   # 0.5 = equal weight cargo vs punctuality (was 0.75)
+    "beta":             0.75,
     "log_every":        200,
     "seed":             42,
 }
 
-RESULTS_DIR = os.path.join(_here, "results")
-os.makedirs(RESULTS_DIR, exist_ok=True)
-
 ALGO_COLORS = {
     "a2c":          "#1f77b4",
+    "dqn":          "#ff7f0e",
+    "ac":           "#2ca02c",
     "no_hold":      "#7f7f7f",
     "heuristic_15": "#bcbd22",
     "heuristic_30": "#17becf",
 }
 DISPLAY = {
-    "a2c":          "A2C",
-    "no_hold":      "No Hold",
-    "heuristic_15": "Heur.15",
-    "heuristic_30": "Heur.30",
+    "a2c": "A2C", "dqn": "DQN", "ac": "AC",
+    "no_hold": "No Hold", "heuristic_15": "Heur.15", "heuristic_30": "Heur.30",
 }
 
 
-# ── Baseline policies ──────────────────────────────────────────────────────────
+# ── Environment factory ──────────────────────────────────────────────────────────────────
+def build_env(seed: int = 42, alpha: float = 0.75,
+             multi_hub: bool = False):
+    cfg = SimConfig(seed=seed, alpha=alpha,
+                   n_hubs=10 if multi_hub else 1)
+    if multi_hub:
+        return MultiHubLogisticsEnv(cfg)
+    return LogisticsEnv(cfg)
 
-def no_hold(state: np.ndarray) -> int:
-    return 0
 
-def heur15(state: np.ndarray) -> int:
-    """Hold up to 15 min based on τ* hint (state[16])."""
-    return min(round(float(state[16]) * 6), 3)   # index 3 = 15 min
+# ── Baselines ──────────────────────────────────────────────────────────────────
+# State dim [22] = delta_slack (normalized).  Positive slack = feeder on time.
+# Heuristics: if any feeder is delayed (slack < 0.3), hold.
+def no_hold(s):   return 0
 
-def heur30(state: np.ndarray) -> int:
-    """Hold up to 30 min based on τ* hint (state[16])."""
-    return min(round(float(state[16]) * 6), 6)   # index 6 = 30 min
+def heur15(s):
+    """Hold 15 min if there are delayed feeders (delta_slack < threshold)."""
+    delta_slack = s[22]   # normalized transfer slack
+    return 3 if delta_slack < 0.3 else 0   # index 3 = 15 min
+
+def heur30(s):
+    """Hold 30 min if feeders are very late."""
+    delta_slack = s[22]
+    return 6 if delta_slack < 0.1 else (3 if delta_slack < 0.3 else 0)
+
+
+# ── Agent factory ──────────────────────────────────────────────────────────────
+def build_agent(algo: str, cfg: dict, state_dim: int = 34):
+    kw = dict(lr=cfg["lr"], gamma=cfg["gamma"],
+              batch_size=cfg["batch_size"], seed=cfg["seed"], state_dim=state_dim)
+    if algo == "a2c": return A2CAgent(**kw)
+    if algo == "dqn": return DQNAgent(**kw)
+    if algo == "ac":  return ACAgent(**kw)
+    raise ValueError(f"Unknown algo: {algo}")
 
 
 # ── Training loop ──────────────────────────────────────────────────────────────
-
-def train(agent: A2CAgent, env, n_eps: int, cfg: dict) -> dict:
+def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
     print(f"\n{'='*60}")
-    print(f"  Training A2C  ({n_eps} episodes)")
-    print(f"  State dim: {STATE_DIM}  |  Actions: {N_ACTIONS}")
+    print(f"  Training {algo.upper()}  ({n_eps} episodes)")
     print(f"{'='*60}")
 
-    all_rewards = []
-    ep_rewards  = []
+    all_rewards, ep_rewards = [], []
     t0 = time.time()
     gs = 0   # global step counter
 
     for ep in range(n_eps):
-        state = env.reset()
-        # Handle real simulator returning (ctx, info) tuple from reset()
-        if isinstance(state, tuple):
-            state = ctx2state(state[0])
-
+        obs, info = env.reset()
         epr = eps = 0
 
         while True:
-            action, val = agent.select_action(state)
-
-            result = env.step(action)
-            next_raw, reward, done, info = result
-            # Handle real simulator returning ctx objects
-            if hasattr(next_raw, "to_array"):
-                next_state = ctx2state(next_raw)
-            elif isinstance(next_raw, np.ndarray):
-                next_state = next_raw
+            # Select action
+            if algo == "dqn":
+                action = agent.select_action(obs)
+                val    = None
             else:
-                next_state = np.zeros(STATE_DIM, dtype=np.float32)
+                action, val = agent.select_action(obs)
 
-            epr += reward; eps += 1; gs += 1
+            # Step
+            obs2, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
 
-            agent.store(state, action, reward, val, done)
-            if eps % cfg["batch_size"] == 0 or done:
-                _, lv = agent.select_action(next_state)
-                agent.update(last_value=0.0 if done else lv)
+            # Learn
+            if algo == "dqn":
+                agent.push(obs, action, reward, obs2, done)
+                agent.update()
+            else:   # a2c, ac
+                agent.store(obs, action, reward, val, done)
+                if eps % cfg["batch_size"] == 0 or done:
+                    _, lv = agent.select_action(obs2)
+                    agent.update(last_value=0.0 if done else lv)
 
             all_rewards.append(reward)
-            state = next_state
+            obs = obs2
+            epr += reward; eps += 1; gs += 1
 
             if gs % cfg["log_every"] == 0:
                 m = agent.get_metrics()
-                print(f"  Ep {ep+1:3d} | Step {gs:7d} | "
-                      f"AvgR(1k): {m['avg_reward_1k']:.4f} | "
+                stats = env.get_episode_stats()
+                print(f"  Ep {ep+1:3d} | Step {gs:6d} | "
+                      f"AvgR(200): {m['avg_reward_1k']:.4f} | "
                       f"Loss: {m['avg_loss_1k']:.4f} | "
-                      f"Entropy: {m['avg_entropy_1k']:.4f} | "
+                      f"MissRate: {stats.missed_transfer_rate:.2%} | "
+                      f"BayUtil: {stats.mean_bay_utilization:.2%} | "
                       f"Time: {time.time()-t0:.0f}s")
+
             if done:
                 break
 
         mean = epr / max(eps, 1)
         ep_rewards.append(mean)
+        stats = env.get_episode_stats()
+        print(f"  Episode {ep+1:3d} done | Steps: {eps:4d} | "
+              f"MeanRwd: {mean:.4f} | "
+              f"Missed: {stats.n_transfers_missed} | "
+              f"MissRate: {stats.missed_transfer_rate:.2%} | "
+              f"OTP: {stats.OTP:.1f}%")
 
-        # Show logistics-specific metrics if available
-        failed = info.get("failed_transfers",
-                  info.get("missed_connections", 0))
-        otp    = info.get("schedule_OTP_%",
-                  info.get("OTP", 0.0))
-        print(f"  Episode {ep+1:3d} done | Steps: {eps:5d} | "
-              f"Mean reward: {mean:.4f} | "
-              f"Failed transfers: {failed} | "
-              f"OTP: {otp}")
-
-    print(f"\n  A2C training complete in {time.time()-t0:.1f}s")
+    print(f"\n  {algo.upper()} training complete in {time.time()-t0:.1f}s")
     return {
         "all_rewards":     np.array(all_rewards),
         "episode_rewards": np.array(ep_rewards),
@@ -155,29 +165,17 @@ def train(agent: A2CAgent, env, n_eps: int, cfg: dict) -> dict:
     }
 
 
-# ── Evaluation helpers ─────────────────────────────────────────────────────────
-
-def _run_one(env, action_fn) -> dict:
-    """Run one full episode and return metrics summary."""
-    state = env.reset()
-    if isinstance(state, tuple):
-        state = ctx2state(state[0])
-
+# ── Evaluation ─────────────────────────────────────────────────────────────────
+def _run_one_episode(env: LogisticsEnv, action_fn) -> dict:
+    """Run one full episode with a fixed policy. Returns episode metrics."""
+    obs, _ = env.reset()
     rewards = []
     holds = steps = 0
 
     while True:
-        action = action_fn(state)
-        result = env.step(action)
-        next_raw, reward, done, info = result
-
-        if hasattr(next_raw, "to_array"):
-            state = ctx2state(next_raw)
-        elif isinstance(next_raw, np.ndarray):
-            state = next_raw
-        else:
-            state = np.zeros(STATE_DIM, dtype=np.float32)
-
+        action = action_fn(obs)
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         rewards.append(reward)
         steps += 1
         if action > 0:
@@ -185,89 +183,75 @@ def _run_one(env, action_fn) -> dict:
         if done:
             break
 
-    # Use simulator summary if available, else derive from info
-    if hasattr(env, "metrics_summary"):
-        summary = env.metrics_summary()
-    else:
-        summary = {}
-
-    # Overlay live info values, defaulting to 0 for all missing numeric keys
-    for k, v in info.items():
-        if k not in summary:
-            summary[k] = v
-
-    summary["avg_reward"]  = float(np.mean(rewards))
-    summary["holds_pct"]   = 100.0 * holds / max(steps, 1)
-
-    # Normalise OTP to percentage if needed
-    otp = summary.get("schedule_OTP_%", summary.get("OTP", 0))
-    if otp <= 1.0:
-        otp *= 100.0
-    summary["OTP"] = otp
-    return summary
+    stats = env.get_episode_stats()
+    return {
+        "avg_reward":           float(np.mean(rewards)),
+        "missed_transfers":     stats.n_transfers_missed,
+        "transfer_success":     stats.n_transfers_success,
+        "missed_rate":          stats.missed_transfer_rate,
+        "OTP":                  stats.OTP,
+        "mean_bay_utilization": stats.mean_bay_utilization,
+        "mean_departure_delay": stats.total_departure_delay / max(stats.n_total_departures, 1),
+        "holds_pct":            100.0 * holds / max(steps, 1),
+    }
 
 
-def _aggregate(summaries: list, name: str) -> dict:
-    """Average a list of episode summaries and print the result."""
+def _aggregate(results: list, name: str) -> dict:
+    """Average metrics across multiple test episodes."""
     out = {}
-    for k in summaries[0]:
-        try:    out[k] = float(np.mean([s.get(k, 0) for s in summaries]))
-        except: out[k] = summaries[0][k]
-
-    failed   = out.get("failed_transfers", out.get("missed_connections", 0))
-    fail_pct = out.get("failed_transfer_%", 0.0)
-    print(f"  {DISPLAY.get(name, name.upper()):<12} | "
-          f"OTP: {out.get('OTP', out.get('schedule_OTP_%', 0)):5.1f}%  |  "
-          f"Failed: {failed:6.0f} ({fail_pct:.1f}%)  |  "
-          f"Arr: {out.get('avg_delivery_delay_min', 0):5.2f}m  |  "
-          f"BayUtil: {out.get('avg_bay_utilisation_%', 0):4.1f}%  |  "
+    for k in results[0]:
+        try:    out[k] = float(np.mean([r[k] for r in results]))
+        except: out[k] = results[0][k]
+    print(f"  {DISPLAY.get(name, name.upper()):<14} | "
+          f"MissRate: {out.get('missed_rate', 0):5.2%}  | "
+          f"OTP: {out.get('OTP', 0):5.1f}%  | "
+          f"Missed: {out.get('missed_transfers', 0):6.0f}  | "
+          f"BayUtil: {out.get('mean_bay_utilization', 0):5.2%}  | "
           f"Holds: {out.get('holds_pct', 0):5.1f}%")
     return out
 
 
-def evaluate_agent(agent: A2CAgent, env, n_eps: int) -> dict:
-    print(f"\n  Evaluating A2C ({n_eps} episodes)...")
+def evaluate_agent(agent, env: LogisticsEnv, n_eps: int, algo: str) -> dict:
+    print(f"\n  Evaluating {DISPLAY.get(algo, algo)} ({n_eps} episodes)...")
     fn = lambda s: agent.greedy_action(s)
-    return _aggregate([_run_one(env, fn) for _ in range(n_eps)], "a2c")
+    return _aggregate([_run_one_episode(env, fn) for _ in range(n_eps)], algo)
 
 
-def evaluate_baseline(policy_fn, env, n_eps: int, name: str) -> dict:
+def evaluate_baseline(policy_fn, env: LogisticsEnv, n_eps: int, name: str) -> dict:
     print(f"  Evaluating baseline: {name}...")
-    return _aggregate([_run_one(env, policy_fn) for _ in range(n_eps)], name)
+    return _aggregate([_run_one_episode(env, policy_fn) for _ in range(n_eps)], name)
 
 
 # ── Plotting ───────────────────────────────────────────────────────────────────
-
-def smooth(x: np.ndarray, w: int = 500) -> np.ndarray:
+def smooth(x, w=200):
     if len(x) == 0: return x
     w = min(w, max(1, len(x) // 10))
     return np.convolve(x, np.ones(w) / w, mode="valid")
 
 
 def plot_fig6(results: dict, save: str):
-    """Failed transfers + Schedule OTP per method."""
-    order   = ["a2c", "heuristic_30", "heuristic_15", "no_hold"]
+    """Missed transfers + Transfer success rate (analog of paper Figure 6)."""
+    order   = ["a2c", "dqn", "ac", "heuristic_30", "heuristic_15", "no_hold"]
     methods = [m for m in order if m in results]
-    failed  = [results[m].get("failed_transfers",
-                results[m].get("missed_connections", 0)) for m in methods]
-    otp     = [results[m].get("OTP", 0) for m in methods]
+    missed  = [results[m].get("missed_transfers", 0) for m in methods]
+    miss_r  = [results[m].get("missed_rate", 0) * 100 for m in methods]
     labels  = [DISPLAY.get(m, m) for m in methods]
     colors  = [ALGO_COLORS.get(m, "#aaa") for m in methods]
 
     x = np.arange(len(methods)); w = 0.35
-    fig, ax1 = plt.subplots(figsize=(10, 5))
+    fig, ax1 = plt.subplots(figsize=(12, 5))
     ax2 = ax1.twinx()
-    ax1.bar(x - w/2, failed, w, color=colors, alpha=0.85)
-    ax2.bar(x + w/2, otp,    w, color=colors, alpha=0.40,
+    ax1.bar(x - w/2, missed, w, color=colors, alpha=0.85)
+    ax2.bar(x + w/2, miss_r, w, color=colors, alpha=0.40,
             edgecolor="black", linewidth=0.8)
-    ax1.set_ylabel("Failed cargo transfers", color="#d62728", fontsize=11)
-    ax2.set_ylabel("Schedule OTP (%)",       color="#1f77b4", fontsize=11)
+    ax1.set_ylabel("Missed cargo transfers (count)", color="#d62728", fontsize=11)
+    ax2.set_ylabel("Missed transfer rate (%)",        color="#1f77b4", fontsize=11)
     ax1.set_xticks(x); ax1.set_xticklabels(labels, rotation=10, fontsize=10)
-    ax1.set_title("Figure 6 — Logistics metrics: failed transfers & OTP", fontsize=12)
+    ax1.set_title("Figure 6 — Logistics: Missed transfers and miss rate", fontsize=12)
     from matplotlib.patches import Patch
     ax1.legend(handles=[
-        Patch(fc="gray", alpha=0.85, label="Failed transfers (left)"),
-        Patch(fc="gray", alpha=0.40, ec="black", lw=0.8, label="OTP % (right)"),
+        Patch(fc="gray", alpha=0.85, label="Missed transfers (left)"),
+        Patch(fc="gray", alpha=0.40, ec="black", lw=0.8, label="Miss rate % (right)"),
     ], loc="upper right")
     ax1.grid(alpha=0.3, axis="y")
     plt.tight_layout()
@@ -275,162 +259,159 @@ def plot_fig6(results: dict, save: str):
     print(f"  Saved → {save}")
 
 
-def plot_fig7(train_result: dict, save: str):
-    """RL training metrics — reward, value, loss."""
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-    c = ALGO_COLORS["a2c"]
+def plot_fig6b(results: dict, save: str):
+    """Bay utilization + departure delay (Phase 2 specific)."""
+    order   = ["a2c", "dqn", "ac", "heuristic_30", "heuristic_15", "no_hold"]
+    methods = [m for m in order if m in results]
+    labels  = [DISPLAY.get(m, m) for m in methods]
+    bay_u   = [results[m].get("mean_bay_utilization", 0) * 100 for m in methods]
+    dep_d   = [results[m].get("mean_departure_delay", 0)        for m in methods]
 
-    if len(train_result["all_rewards"]) > 0:
-        axes[0].plot(smooth(train_result["all_rewards"]),
-                     color=c, linewidth=1.5, label="A2C")
-    if len(train_result["q_values"]) > 0:
-        axes[1].plot(smooth(train_result["q_values"], w=50),
-                     color=c, linewidth=1.5, label="A2C")
-    if len(train_result["losses"]) > 0:
-        axes[2].plot(smooth(train_result["losses"], w=50),
-                     color=c, linewidth=1.5, label="A2C")
-
-    for ax, t, y in zip(
-        axes,
-        ["(a) Average reward", "(b) Value baseline", "(c) Net loss"],
-        ["Avg reward (smoothed)", "Avg value", "Avg loss"],
-    ):
-        ax.set_title(t, fontsize=10)
-        ax.set_xlabel("Step")
-        ax.set_ylabel(y)
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.3)
-
-    plt.suptitle("Figure 7 — A2C training metrics (Phase 2 Logistics)", fontsize=11)
+    x = np.arange(len(methods)); w = 0.35
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+    ax2 = ax1.twinx()
+    ax1.bar(x - w/2, bay_u, w, color="#1f77b4", alpha=0.85, label="Bay utilization %")
+    ax2.bar(x + w/2, dep_d, w, color="#ff7f0e", alpha=0.85, label="Departure delay (min)")
+    ax1.set_ylabel("Mean bay utilization (%)", color="#1f77b4", fontsize=11)
+    ax2.set_ylabel("Mean departure delay (min)", color="#ff7f0e", fontsize=11)
+    ax1.set_xticks(x); ax1.set_xticklabels(labels, rotation=10, fontsize=10)
+    ax1.set_title("Figure 6b — Bay utilization and departure delay", fontsize=12)
+    ax1.legend(loc="upper left"); ax2.legend(loc="upper right")
+    ax1.grid(alpha=0.3, axis="y")
     plt.tight_layout()
     plt.savefig(save, dpi=150, bbox_inches="tight"); plt.close()
     print(f"  Saved → {save}")
 
 
-def plot_fig8(cfg: dict, save: str, use_real: bool = False):
-    """α/β tunability sweep — mirrors paper Figure 8."""
+def plot_fig7(train_results: dict, algos: list, save: str):
+    """Training metrics: reward, value, loss (analog of paper Figure 7)."""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    for name in algos:
+        res = train_results[name]
+        c   = ALGO_COLORS.get(name, "gray")
+        lbl = DISPLAY.get(name, name.upper())
+        if len(res["all_rewards"]) > 0:
+            axes[0].plot(smooth(res["all_rewards"]), label=lbl, color=c, linewidth=1.5)
+        if len(res["q_values"]) > 0:
+            axes[1].plot(smooth(res["q_values"], w=50), label=lbl, color=c, linewidth=1.5)
+        if len(res["losses"]) > 0:
+            axes[2].plot(smooth(res["losses"], w=50), label=lbl, color=c, linewidth=1.5)
+    for ax, title, ylabel in zip(
+        axes,
+        ["(a) Average reward", "(b) Value / Q-estimate", "(c) Network loss"],
+        ["Avg reward (smoothed)", "Avg value", "Avg loss"]
+    ):
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("Step"); ax.set_ylabel(ylabel)
+        ax.legend(fontsize=8); ax.grid(alpha=0.3)
+    plt.suptitle("Figure 7 — Phase 2 RL training metrics (smoothed)", fontsize=11)
+    plt.tight_layout()
+    plt.savefig(save, dpi=150, bbox_inches="tight"); plt.close()
+    print(f"  Saved → {save}")
+
+
+def plot_fig8(cfg: dict, save: str, multi_hub: bool):
+    """Alpha/beta tunability sweep (analog of paper Figure 8)."""
     print("\n  Running Figure 8: α/β sweep (A2C, 2 eps each)...")
     alphas = [0.10, 0.25, 0.50, 0.75, 1.00]
     betas  = [0.10, 0.50, 1.00]
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
 
-    base_env = build_env(seed=42, use_real=use_real)
-    base_sum = _run_one(base_env, no_hold)
-    base_f   = base_sum.get("failed_transfers",
-                base_sum.get("missed_connections", 100))
+    # Baseline miss rate
+    base_env    = build_env(seed=42, multi_hub=multi_hub)
+    base_result = _run_one_episode(base_env, no_hold)
+    base_miss   = base_result.get("missed_transfers", 100)
 
-    fig, ax1 = plt.subplots(figsize=(9, 5))
-    ax2 = ax1.twinx()
-
+    fig, ax = plt.subplots(figsize=(9, 5))
     for j, beta in enumerate(betas):
-        saved_l = []; otp_l = []
+        saved_l = []
         for alpha in alphas:
-            env = build_env(seed=42, alpha=alpha, use_real=use_real)
-            ag  = A2CAgent(state_dim=STATE_DIM, lr=cfg["lr"],
-                           gamma=cfg["gamma"], batch_size=cfg["batch_size"],
-                           seed=42)
-            # Short 2-episode training
+            env = build_env(seed=42, alpha=alpha, multi_hub=multi_hub)
+            ag  = A2CAgent(lr=cfg["lr"], gamma=cfg["gamma"],
+                           batch_size=cfg["batch_size"], seed=42)
+            # Quick 2-episode training
             for _ in range(2):
-                state = env.reset()
-                if isinstance(state, tuple):
-                    state = ctx2state(state[0])
-                steps = 0
+                obs, _ = env.reset(); steps = 0
                 while True:
-                    a, v = ag.select_action(state)
-                    result = env.step(a)
-                    next_raw, r, done, _ = result
-                    if hasattr(next_raw, "to_array"):
-                        ns = ctx2state(next_raw)
-                    else:
-                        ns = next_raw if isinstance(next_raw, np.ndarray) \
-                             else np.zeros(STATE_DIM, dtype=np.float32)
-                    ag.store(state, a, r, v, done)
+                    a, v = ag.select_action(obs)
+                    obs2, r, term, trunc, _ = env.step(a)
+                    done = term or trunc
+                    ag.store(obs, a, r, v, done)
                     if steps % cfg["batch_size"] == 0 or done:
-                        _, lv = ag.select_action(ns)
+                        _, lv = ag.select_action(obs2)
                         ag.update(last_value=0.0 if done else lv)
-                    state = ns; steps += 1
+                    obs = obs2; steps += 1
                     if done: break
 
-            ts = _run_one(build_env(seed=99, alpha=alpha, use_real=use_real),
-                          lambda s: ag.greedy_action(s))
-            f = ts.get("failed_transfers", ts.get("missed_connections", base_f))
-            saved_l.append((base_f - f) / max(base_f, 1) * 100)
-            otp_l.append(ts.get("OTP", 0))
+            ts    = _run_one_episode(build_env(seed=99, alpha=alpha, multi_hub=multi_hub),
+                                     lambda s: ag.greedy_action(s))
+            miss  = ts.get("missed_transfers", base_miss)
+            saved = (base_miss - miss) / max(base_miss, 1) * 100
+            saved_l.append(saved)
 
-        ax1.plot(alphas, saved_l, color=colors[j], marker="o",
-                 label=f"β={beta} (saved)")
-        ax2.plot(alphas, otp_l,   color=colors[j], marker="s",
-                 linestyle="--", label=f"β={beta} (OTP)")
+        ax.plot(alphas, saved_l, color=colors[j], marker="o",
+                linewidth=1.5, label=f"β={beta}")
 
-    ax1.set_xlabel("Alpha (α)", fontsize=11)
-    ax1.set_ylabel("Failed transfers saved % vs No-Hold", fontsize=11)
-    ax2.set_ylabel("Schedule OTP %", fontsize=11)
-    ax1.set_title("Figure 8 — Tunability: α/β sweep (A2C, Phase 2)", fontsize=12)
-    l1, lb1 = ax1.get_legend_handles_labels()
-    l2, lb2 = ax2.get_legend_handles_labels()
-    ax1.legend(l1 + l2, lb1 + lb2, loc="center left", fontsize=8)
-    ax1.grid(alpha=0.3)
+    ax.set_xlabel("Alpha (α) — Cargo vs Operator weight", fontsize=11)
+    ax.set_ylabel("Transfer savings % vs No-Hold", fontsize=11)
+    ax.set_title("Figure 8 — Tunability: α/β sweep (A2C, Logistics)", fontsize=12)
+    ax.legend(fontsize=9); ax.grid(alpha=0.3)
     plt.tight_layout()
     plt.savefig(save, dpi=150, bbox_inches="tight"); plt.close()
     print(f"  Saved → {save}")
 
 
-# ── Summary table ──────────────────────────────────────────────────────────────
-
-def print_table(all_results: dict, rl_results: dict, bl_results: dict):
-    order   = ["no_hold", "heuristic_15", "heuristic_30", "a2c"]
+# ── Results Table ──────────────────────────────────────────────────────────────
+def print_table(all_results: dict):
+    order   = ["no_hold", "heuristic_15", "heuristic_30", "a2c", "dqn", "ac"]
     methods = [m for m in order if m in all_results]
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 88)
     print("  RESULTS TABLE — Phase 2 Logistics HNH")
-    print("="*80)
-    print(f"  {'Method':<14} {'Failed':<10} {'OTP%':>7} "
-          f"{'Arr Dly':>9} {'BayUtil':>9} {'Holds%':>7}")
-    print("  " + "-"*65)
+    print("=" * 88)
+    print(f"  {'Method':<14} {'MissRate':>10} {'OTP%':>7} {'Missed':>8} "
+          f"{'BayUtil':>9} {'DepDly':>8} {'Holds%':>7}")
+    print("  " + "-" * 70)
     for m in methods:
         r = all_results[m]
-        failed   = r.get("failed_transfers", r.get("missed_connections", 0))
-        fail_pct = r.get("failed_transfer_%", 0.0)
         print(f"  {DISPLAY.get(m, m):<14} "
-              f"{failed:<8.0f}({fail_pct:4.1f}%) "
+              f"{r.get('missed_rate', 0):>9.2%} "
               f"{r.get('OTP', 0):>7.1f}% "
-              f"{r.get('avg_delivery_delay_min', 0):>8.2f}m "
-              f"{r.get('avg_bay_utilisation_%', 0):>8.1f}% "
+              f"{r.get('missed_transfers', 0):>8.0f} "
+              f"{r.get('mean_bay_utilization', 0):>8.2%} "
+              f"{r.get('mean_departure_delay', 0):>7.2f}m "
               f"{r.get('holds_pct', 0):>6.1f}%")
 
-    print("\n" + "="*80)
-    print("  FAILED TRANSFER REDUCTION vs BASELINES")
-    print("="*80)
-    print(f"  {'Method':<8} {'vs No-Hold':>12} {'vs Heur-15':>12} {'vs Heur-30':>12}")
-    print("  " + "-"*47)
-    if "a2c" in rl_results:
-        a  = rl_results["a2c"]
-        af = a.get("failed_transfers", a.get("missed_connections", 0))
-        row = "  A2C     "
-        for bname in ["no_hold", "heuristic_15", "heuristic_30"]:
-            if bname in bl_results:
-                b   = bl_results[bname]
-                bf  = b.get("failed_transfers", b.get("missed_connections", 0))
-                if bf > 0:
-                    red = (bf - af) / bf * 100
-                    row += f"{red:>10.1f}%  "
-                else:
-                    row += f"{'N/A':>10}   "
-        print(row)
+    # Delta vs no_hold
+    nh = all_results.get("no_hold", {})
+    nh_miss = nh.get("missed_transfers", 1)
+    nh_otp  = nh.get("OTP", 0)
+    print("\n" + "=" * 88)
+    print("  SAVINGS vs No-Hold  (Transfer Savings ↑ better | OTP Delta ↑ better)")
+    print("=" * 88)
+    print(f"  {'Method':<8} {'Transfer Savings':>18} {'OTP Delta':>14}")
+    print("  " + "-" * 44)
+    for algo in ["a2c", "dqn", "ac"]:
+        if algo not in all_results: continue
+        m     = all_results[algo].get("missed_transfers", nh_miss)
+        otp   = all_results[algo].get("OTP", nh_otp)
+        pct   = (nh_miss - m) / max(nh_miss, 1) * 100
+        otpd  = otp - nh_otp
+        sign  = "+" if pct  > 0 else ""
+        osign = "+" if otpd > 0 else ""
+        print(f"  {DISPLAY[algo]:<8} {sign}{pct:>15.1f}%    {osign}{otpd:>8.1f} pp")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
-
 def main():
-    parser = argparse.ArgumentParser(description="Phase 2 HNH Logistics RL Training")
-    parser.add_argument("--algo",         default="a2c",
-                        choices=["a2c"],
-                        help="Algorithm to train (only a2c for Phase 2)")
-    parser.add_argument("--episodes",     type=int,  default=None)
-    parser.add_argument("--no-plots",     action="store_true")
-    parser.add_argument("--no-sweep",     action="store_true")
-    parser.add_argument("--use-real-sim", action="store_true",
-                        help="Use CrossDockSimulator (requires dataset CSV)")
+    parser = argparse.ArgumentParser(description="Phase 2 Logistics HNH RL")
+    parser.add_argument("--algo",      default="all",
+                        choices=["all", "a2c", "dqn", "ac"])
+    parser.add_argument("--episodes",  type=int, default=None)
+    parser.add_argument("--no-plots",  action="store_true")
+    parser.add_argument("--no-sweep",  action="store_true")
+    parser.add_argument("--multi-hub", action="store_true",
+                        help="Use 3-hub cascading network (true Phase 1 extension)")
     args = parser.parse_args()
 
     cfg = DEFAULT_CONFIG.copy()
@@ -438,58 +419,58 @@ def main():
         cfg["n_train_episodes"] = args.episodes
         cfg["n_test_episodes"]  = max(1, args.episodes // 5)
 
-    mode = "real simulator" if args.use_real_sim else "stub environment"
-    print("\n" + "="*60)
-    print("  Hold-No-Hold RL  [Phase 2 — Logistics Cross-Docking]")
-    print(f"  Mode        : {mode}")
-    print(f"  State dim   : {STATE_DIM}  |  Actions: {N_ACTIONS}")
+    algos = ["a2c", "dqn", "ac"] if args.algo == "all" else [args.algo]
+    multi_hub = args.multi_hub
+    state_dim = 42 if multi_hub else 34
+
+    print("\n" + "=" * 60)
+    print("  Phase 2 Logistics — Hold-or-Not-Hold RL")
+    print(f"  Mode        : {'10-Hub FAF5 Mesh CASCADE ✓' if multi_hub else 'Single-Hub'}")
+    print(f"  Algorithms  : {algos}")
+    print(f"  State dim   : {state_dim}  |  Actions: 7  |  "
+          f"Env: {'MultiHubLogisticsEnv' if multi_hub else 'LogisticsEnv'}")
     print(f"  Train eps   : {cfg['n_train_episodes']}  |  "
           f"Test eps: {cfg['n_test_episodes']}")
     print(f"  α={cfg['alpha']}  β={cfg['beta']}  "
           f"lr={cfg['lr']}  γ={cfg['gamma']}")
-    print("="*60)
+    print("=" * 60)
 
     # ── Train ──────────────────────────────────────────────────────────────────
-    env   = build_env(seed=cfg["seed"], alpha=cfg["alpha"],
-                      use_real=args.use_real_sim)
-    agent = A2CAgent(
-        state_dim    = STATE_DIM,
-        action_dim   = N_ACTIONS,
-        lr           = cfg["lr"],
-        gamma        = cfg["gamma"],
-        batch_size   = cfg["batch_size"],
-        entropy_coef = cfg.get("entropy_coef", 0.01),
-        seed         = cfg["seed"],
-    )
-    train_result = train(agent, env, cfg["n_train_episodes"], cfg)
+    train_results = {}; agents = {}
+    for algo in algos:
+        env   = build_env(seed=cfg["seed"], alpha=cfg["alpha"], multi_hub=multi_hub)
+        agent = build_agent(algo, cfg, state_dim=state_dim)
+        result = train(agent, env, cfg["n_train_episodes"], algo, cfg)
+        train_results[algo] = result
+        agents[algo]        = agent
+        try:
+            with open(os.path.join(RESULTS_DIR, f"{algo}_agent.pkl"), "wb") as f:
+                pickle.dump(agent, f)
+        except Exception:
+            pass
 
-    try:
-        with open(f"{RESULTS_DIR}/a2c_agent.pkl", "wb") as f:
-            pickle.dump(agent, f)
-        print(f"  Agent saved → {RESULTS_DIR}/a2c_agent.pkl")
-    except Exception as e:
-        print(f"  Warning: could not save agent: {e}")
-
-    # ── Baselines ──────────────────────────────────────────────────────────────
-    print("\n" + "="*60)
+    # ── Evaluate baselines ─────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
     print("  Evaluating baselines")
-    print("="*60)
+    print("=" * 60)
     bl_results = {}
-    for name, fn in [("no_hold",      no_hold),
-                     ("heuristic_15", heur15),
+    for name, fn in [("no_hold", no_hold), ("heuristic_15", heur15),
                      ("heuristic_30", heur30)]:
-        env = build_env(seed=cfg["seed"] + 100, use_real=args.use_real_sim)
+        env = build_env(seed=cfg["seed"] + 100, alpha=cfg["alpha"], multi_hub=multi_hub)
         bl_results[name] = evaluate_baseline(fn, env, cfg["n_test_episodes"], name)
 
-    # ── Evaluate A2C ───────────────────────────────────────────────────────────
-    print("\n" + "="*60)
-    print("  Evaluating A2C agent")
-    print("="*60)
-    env = build_env(seed=cfg["seed"] + 100, use_real=args.use_real_sim)
-    rl_results = {"a2c": evaluate_agent(agent, env, cfg["n_test_episodes"])}
+    # ── Evaluate RL agents ─────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("  Evaluating RL agents")
+    print("=" * 60)
+    rl_results = {}
+    for algo in algos:
+        env = build_env(seed=cfg["seed"] + 100, alpha=cfg["alpha"], multi_hub=multi_hub)
+        rl_results[algo] = evaluate_agent(agents[algo], env,
+                                          cfg["n_test_episodes"], algo)
 
     all_results = {**bl_results, **rl_results}
-    print_table(all_results, rl_results, bl_results)
+    print_table(all_results)
 
     # ── Save JSON ──────────────────────────────────────────────────────────────
     try:
@@ -498,25 +479,23 @@ def main():
             out[k] = {kk: (float(vv) if isinstance(vv, (int, float, np.floating))
                            else vv)
                       for kk, vv in v.items()}
-        with open(f"{RESULTS_DIR}/summary.json", "w") as f:
+        with open(os.path.join(RESULTS_DIR, "summary.json"), "w") as f:
             json.dump(out, f, indent=2)
-        print(f"\n  Summary → {RESULTS_DIR}/summary.json")
+        print(f"\n  Summary saved → {RESULTS_DIR}/summary.json")
     except Exception as e:
         print(f"  Warning: could not save JSON: {e}")
 
     # ── Plots ──────────────────────────────────────────────────────────────────
     if not args.no_plots:
-        try:
-            print("\n  Generating plots...")
-            plot_fig6(all_results,
-                      f"{RESULTS_DIR}/figure6_failed_transfers.png")
-            plot_fig7(train_result,
-                      f"{RESULTS_DIR}/figure7_training_metrics.png")
-            if not args.no_sweep:
-                plot_fig8(cfg, f"{RESULTS_DIR}/figure8_tunability.png",
-                          use_real=args.use_real_sim)
-        except Exception as e:
-            print(f"  Warning: plotting failed: {e}")
+        print("\n  Generating plots...")
+        plot_fig6(all_results,
+                  os.path.join(RESULTS_DIR, "figure6_missed_transfers.png"))
+        plot_fig6b(all_results,
+                   os.path.join(RESULTS_DIR, "figure6b_bay_delay.png"))
+        plot_fig7(train_results, algos,
+                  os.path.join(RESULTS_DIR, "figure7_rl_metrics.png"))
+        if not args.no_sweep:
+            plot_fig8(cfg, os.path.join(RESULTS_DIR, "figure8_tunability.png"))
 
     print("\n  All done. Results in ./results/")
 
