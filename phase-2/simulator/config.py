@@ -1,201 +1,173 @@
 """
-Configuration and hyperparameters for the logistics cross-docking simulator.
+SimConfig — Central configuration dataclass for the Phase 2 Simulator.
 
-Two hub profiles:
-  HUB_SMALL : ~400 truck movements/day, 1 main hub, 20 bays
-  HUB_LARGE : ~1400 truck movements/day, 4 main hubs, 60 bays
+All hyperparameters are in one place. Mirrors the paper's setup (Section 6.2)
+adapted for the cross-docking logistics domain.
 
-CALIBRATION SOURCE — FAF5 (NTAD Freight Analysis Framework):
-  487,394 US road links analysed:
-    Speed_Limit mean = 47.5 mph
-    AB_FinalSpeed mean = 43.2 mph  (actual achieved speed)
-    Speed loss mean = 4.3 mph, std = 6.7 mph
-    Free-flow travel time: 74% of links < 1h, 14% at 1-3h, 12% > 3h
-  These values drive road_delay_sigma and route duration thresholds below.
+Usage:
+    cfg = SimConfig()                   # all defaults
+    cfg = SimConfig(n_bays=20, alpha=0.8)  # override specific params
 """
 
 from __future__ import annotations
+import os
 from dataclasses import dataclass, field
 from typing import List
 
 
-# ---------------------------------------------------------------------------
-# HubProfile  (aviation analog: AirlineProfile)
-# ---------------------------------------------------------------------------
-@dataclass
-class HubProfile:
-    """Scale parameters for a synthetic logistics hub network.
-
-    Maps to AirlineProfile field-for-field:
-      trucks_per_day          ← flights_per_day
-      num_routes              ← num_aircraft
-      num_hubs                ← num_hubs
-      num_lanes               ← num_airports
-      connecting_cargo_fraction ← connecting_pax_fraction
-      avg_load_factor         ← avg_load_factor
-      avg_cargo_per_truck     ← avg_seats
-      baseline_failed_transfer_rate ← baseline_misconnect_rate
-      baseline_schedule_otp   ← baseline_otp
-    """
-
-    name: str
-
-    # Network scale
-    trucks_per_day: int           # total outbound truck legs per day across all routes
-    num_routes: int               # number of truck route chains (= num_aircraft / tail plans)
-    num_hubs: int                 # number of cross-docking hubs in the network
-    num_lanes: int                # origin + destination lanes (= num_airports)
-
-    # Cargo profile
-    connecting_cargo_fraction: float = 0.35   # fraction of cargo that needs a transfer
-    avg_load_factor: float = 0.80             # fraction of cargo capacity filled
-    avg_cargo_per_truck: int = 120            # total cargo unit slots per truck
-
-    # Baselines (used by validation.py to check plausibility)
-    baseline_failed_transfer_rate: float = 0.05
-    baseline_schedule_otp: float = 0.85
-
-    # Delay distribution overrides (None → use SimConfig global defaults)
-    departure_delay_mu: float | None = None
-    departure_delay_sigma: float | None = None
-
-    # Transfer buffer above minimum (= connection_buffer in aviation)
-    transfer_buffer_minutes: int | None = None
-
-
-# Pre-defined profiles
-HUB_SMALL = HubProfile(
-    name="Hub-Small",
-    trucks_per_day=400,
-    num_routes=120,
-    num_hubs=1,
-    num_lanes=80,
-    connecting_cargo_fraction=0.35,
-    avg_load_factor=0.80,
-    avg_cargo_per_truck=120,
-    baseline_failed_transfer_rate=0.05,
-    baseline_schedule_otp=0.85,
-    departure_delay_mu=0.55,     # recalibrated: OTP ≈ 85 % (was 0.70 → 81%)
-    departure_delay_sigma=0.85,
-    transfer_buffer_minutes=10,  # increased from 5 to reduce failed transfers back to ~5%
-)
-
-HUB_LARGE = HubProfile(
-    name="Hub-Large",
-    trucks_per_day=1400,
-    num_routes=500,
-    num_hubs=4,
-    num_lanes=280,
-    connecting_cargo_fraction=0.40,
-    avg_load_factor=0.82,
-    avg_cargo_per_truck=140,
-    baseline_failed_transfer_rate=0.08,
-    baseline_schedule_otp=0.82,
-    departure_delay_mu=0.82,     # increased from 0.75 to hit 82% OTP target
-    departure_delay_sigma=0.85,
-    transfer_buffer_minutes=10,  # increased from 5 to reduce failed transfers
-)
-
-
-# ---------------------------------------------------------------------------
-# SimConfig  (mirrors simulator/config.py SimConfig exactly)
-# ---------------------------------------------------------------------------
 @dataclass
 class SimConfig:
-    """All tuneable knobs for the logistics cross-docking microsimulator.
+    """All simulation hyperparameters in one place.
 
-    CALIBRATION NOTES (against FAF5 dataset):
-      departure_delay_mu  = 0.70  → lognormal median ≈ 2.0 min → OTP ≈ 85 %
-      road_delay_sigma    = 10.0  → from FAF5 speed std (6.7 mph on 100-mile route
-                                     ≈ 9-min travel-time std → 10 min chosen)
-      short_route_max     = 120   → 2h (FAF5: short-haul clusters at 60-120 min)
-      long_route_min      = 360   → 6h (FAF5: long-haul > 360 min, 10% of routes)
+    Defaults are calibrated to produce realistic logistics behavior
+    comparable to the paper's Air-East results.
     """
 
-    hub: HubProfile = field(default_factory=lambda: HUB_SMALL)
+    # ── Reward knobs (Section 5, paper) ──────────────────────────────
+    # Same optimal values as paper: α=0.75, β=0.75
+    alpha: float = 0.75
+    """Cargo Utility vs Operator Utility trade-off weight (α)."""
 
-    # ── Simulation time ────────────────────────────────────────────────────
-    num_days: int = 7
-    epoch_length_hours: float = 24.0
-    random_seed: int = 42
+    beta: float = 0.75
+    """Local reward vs Global reward weight (β)."""
 
-    # ── Hold action space {0,5,10,15,20,25,30} min (PDF §7 — identical to Phase 1)
+    lambda_congestion: float = 0.30
+    """Bay-congestion penalty weight in global reward (λ_bay).
+    Scales how much bay-blockage attribution reduces R_G.
+    0.30 means bay-congestion contributes at most ~30% of global signal.
+    """
+
+    # ── RL action space ───────────────────────────────────────────────
     hold_actions: List[int] = field(
         default_factory=lambda: [0, 5, 10, 15, 20, 25, 30]
     )
-    max_hold_minutes: int = 30
+    """Discrete hold durations in minutes. 7 actions, matching paper."""
 
-    # ── Delay distributions ────────────────────────────────────────────────
-    # Departure delay: recalibrated from 0.70 to 0.55 to close OTP gap (81% → 85%)
-    # lognormal(0.55, 0.85): median=1.73 min, P(>15)=0.8% → OTP ~85% after cascades
-    departure_delay_mu: float = 0.55
-    departure_delay_sigma: float = 0.85
+    # ── Hub parameters ────────────────────────────────────────────────
+    n_bays: int = 15
+    """Number of docking bays at the cross-docking hub.
+    Logistics hubs typically have 10-30 bays; 15 creates realistic
+    congestion at 80 trucks/day given ~30 min average dwell time.
+    """
 
-    # Road delay: reverted to 10.0 to reduce arrival variance and lower failed transfers
-    # FAF5: speed_std=6.7mph on 100-mile route → time_std ≈ 9-12 min
-    road_delay_mu: float = 0.0
-    road_delay_sigma: float = 10.0
+    operating_start: int = 360
+    """Hub opens at 06:00 (360 minutes from midnight)."""
 
-    # Bay dwell delay: reduced sigma 4 → 2.5 (was adding too much departure delay noise)
-    # bay_dwell only adds to DEPARTURE delay; keeping it smaller preserves OTP
-    bay_dwell_mu: float = 0.0
-    bay_dwell_sigma: float = 2.5
+    operating_end: int = 1320
+    """Hub closes at 22:00 (1320 minutes from midnight)."""
 
-    # ── Route classification thresholds (minutes door-to-door) ───────────
-    # FAF5 calibration: 55 % short, 35 % medium, 10 % long (cross-docking reality)
-    short_route_max: int = 120     # ≤ 2 h
-    long_route_min: int = 360      # ≥ 6 h
-    # Coefficient of variance by route length
-    cv_short: float = 0.12
-    cv_medium: float = 0.08
-    cv_long: float = 0.05
+    mtt: int = 30
+    """Minimum Transfer Time in minutes.
+    Minimum time needed to unload from inbound and load to outbound.
+    Logistics analog of MCT (Minimum Connection Time) in aviation.
+    """
 
-    # ── Transfer timing (= MCT analogs) ──────────────────────────────────
-    # Increased from 20/35 to 25/40 to create slightly tighter transfer windows 
-    # but not as extreme as 30/50.
-    min_transfer_time_main: int = 25    
-    min_transfer_time_spoke: int = 40
+    otp_threshold: int = 15
+    """On-Time Performance threshold in minutes.
+    Arrival within 15 min of schedule = on-time (same as paper).
+    """
 
-    # ── Reward / utility normalisation (PDF §5) ───────────────────────────
-    delta_C: float = 480.0    # Δ_C — max tolerable cargo delivery delay (min); replaces delta_p
-    delta_F: float = 60.0     # Δ_F — max tolerable operator departure delay (min); replaces delta_f
+    # ── Delay normalizers ─────────────────────────────────────────────
+    delta_c: float = 1440.0
+    """Max cargo delay in minutes (24h = next-cycle penalty).
+    When cargo misses connection, it waits for next truck = 24h delay.
+    Aviation analog: rebooking penalty (typically +120 min in paper).
+    """
 
-    # ── RL knobs (PDF §7, identical to Phase 1 defaults) ─────────────────
-    alpha: float = 0.75     # cargo utility vs operator utility trade-off
-    beta: float = 0.75      # local vs global reward trade-off
+    delta_f: float = 60.0
+    """Operator delay normalizer in minutes.
+    Departure delays > delta_f are fully penalised (AU → 0).
+    """
 
-    # ── Global utility window ─────────────────────────────────────────────
-    global_window_hours: float = 24.0   # W = 24 h (PDF §7)
+    decay_lambda: float = 0.05
+    """Exponential decay rate for perishable cargo disutility.
+    σ_perishable(τ) = 1 - exp(-decay_lambda * delay).
+    At decay_lambda=0.05: 60-min delay → 95% disutility.
+    """
 
-    # ── On-time threshold (minutes) ───────────────────────────────────────
-    ontime_threshold: float = 15.0
+    # ── Congestion parameters ─────────────────────────────────────────
+    bay_congestion_threshold: float = 0.7
+    """Bay utilization above this level triggers OL congestion penalty.
+    At BG > 0.7 (>10.5 of 15 bays occupied), holding is extra-penalised.
+    """
 
-    # ── Route plan ────────────────────────────────────────────────────────
-    avg_legs_per_route: int = 4
-    min_turnaround: int = 45          # min turnaround at hub (minutes)
-    first_departure_spread: float = 0.6
-    dock_lead_minutes: float = 45.0   # cross-docking unload time before departure
+    lambda_bay_local: float = 0.10
+    """Weight of bay-congestion penalty in local OL(τ).
+    OL(τ) = schedule_term - lambda_bay_local * congestion_term.
+    """
 
-    # ── Bay management ────────────────────────────────────────────────────
-    num_bays: int = 20
+    # ── Episode parameters ────────────────────────────────────────────
+    episode_days: int = 7
+    """Length of one training episode in simulated days (= 1 week)."""
 
-    # ── NEW logistics-only knobs (PDF §7, no aviation analog) ────────────
-    lambda_congestion: float = 0.30    # λ: bay-blockage penalty weight in OL(τ)
-    B_thresh: float = 0.80             # B_thresh: BG above which congestion penalty activates
-    bay_curfew_threshold: float = 0.95 # hard cap: if BG > this, force hold = 0
+    trucks_per_day: int = 80
+    """Number of inbound trucks per day at the hub.
+    Scale: Air-East had ~460 flights/day over a full network.
+    80 inbound trucks at 1 hub is comparable in HNH decision density.
+    """
 
-    T_sla: float = 30.0                # SLA tolerance window (replaces 15-min grace, min)
-    sla_urgency_levels: List[int] = field(default_factory=lambda: [0, 1, 2])
+    # ── Driver / regulatory constraints ───────────────────────────────
+    max_driver_hours: float = 660.0
+    """Maximum legal driving hours per shift in minutes (= 11 hours HOS).
+    L_k state variable = remaining driver hours. Agent cannot hold
+    beyond this limit (negative reward imposed).
+    """
 
-    # Perishability: cargo flagged when IoT temp outside safe range (CSV: iot_temperature)
-    perishable_temp_max: float = 8.0
-    # Perishable exponential decay rate (higher = faster penalty growth with delay)
-    perishable_decay_rate: float = 0.004
+    # ── Global rolling window ─────────────────────────────────────────
+    global_window_minutes: float = 1440.0
+    """Rolling window for global utility averages = 24 hours."""
 
-    # Next-cycle penalty for missed transfer (24h = logistics equivalent of rebook delay)
-    next_cycle_penalty_minutes: float = 1440.0
+    # ── Cargo profile defaults (overridden by calibrated data) ────────
+    perishable_frac: float = 0.174
+    """Fraction of cargo that is perishable (from CFS 2022: 17.4%)."""
 
-    # ── Reproducibility ───────────────────────────────────────────────────
-    def copy(self, **overrides) -> "SimConfig":
-        import dataclasses
-        return dataclasses.replace(self, **overrides)
+    # ── Paths ─────────────────────────────────────────────────────────
+    data_dir: str = "phase-2/data"
+    calibrated_dir: str = "phase-2/simulator/calibrated"
+
+    # ── Random seed ───────────────────────────────────────────────────
+    seed: int = 42
+
+    # ── Multi-hub network parameters ──────────────────────────────────
+    n_hubs: int = 1
+    """Number of hubs (1 = single-hub legacy, 10 = full FAF5 mesh)."""
+
+    hub_ids: List[str] = field(
+        default_factory=list
+    )
+    """Hub IDs — auto-populated from routing_matrix.json by HubChain."""
+
+    transit_time_mean: float = 60.0
+    """Mean truck transit time between adjacent hubs in minutes (~1 hour highway)."""
+
+    transit_time_std: float = 10.0
+    """Standard deviation of inter-hub transit time in minutes."""
+
+    inter_hub_fraction: float = 0.30
+    """Fraction of outbound trucks that travel to the next hub (vs local delivery).
+    These become inbound feeders at the downstream hub, creating cascade effects.
+    """
+
+    def __post_init__(self):
+        os.makedirs(self.calibrated_dir, exist_ok=True)
+
+    @property
+    def n_actions(self) -> int:
+        return len(self.hold_actions)
+
+    @property
+    def state_dim(self) -> int:
+        """State dims: 34 local + 8 network context = 42 for multi-hub."""
+        return 42 if self.n_hubs > 1 else 34
+
+    def hold_minutes(self, action_idx: int) -> int:
+        """Convert discrete action index to hold minutes."""
+        return self.hold_actions[action_idx]
+
+    def action_index(self, hold_minutes: int) -> int:
+        """Convert hold minutes to action index."""
+        try:
+            return self.hold_actions.index(int(hold_minutes))
+        except ValueError:
+            return 0
+
