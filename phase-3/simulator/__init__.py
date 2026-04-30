@@ -1,41 +1,19 @@
-"""
-Phase 3 — Network HNH Simulator package.
-
-Exports the main entry points for the discrete-event microsimulator.
-"""
-
+"""Phase 3 DAG HNH Simulator package."""
 from simulator.config import SimConfig
-from simulator.event_engine import EventEngine
-from simulator.generators import (
-    PacketGenerator,
-    PropagationSampler,
-    ProcessingSampler,
-    generate_fragment_groups,
-    generate_topology,
-)
+from simulator.simulator import DAGSchedulingSimulator
 from simulator.models import (
-    DropCause,
-    EventType,
-    FlowState,
-    FragmentGroup,
-    Packet,
-    PacketState,
-    PacketStatus,
-    ProtocolClass,
-    Router,
-    SimEvent,
-    TCPFlagClass,
+    Job, Task, TaskState, TaskStatus,
+    Machine, ClusterSnapshot, MetricsTracker,
+    SchedulingClass, WorkloadType, GpuType,
 )
-from simulator.simulator import MetricsTracker, NetworkSimulator
+from simulator.state_builder import build_state_vector
+from simulator.reward_engine import compute_reward, attribute_global_reward_delay_tree
 
 __all__ = [
-    "SimConfig",
-    "EventEngine",
-    "EventType", "SimEvent",
-    "Packet", "PacketState", "PacketStatus",
-    "Router", "FlowState", "FragmentGroup",
-    "ProtocolClass", "TCPFlagClass", "DropCause",
-    "PacketGenerator", "PropagationSampler", "ProcessingSampler",
-    "generate_topology", "generate_fragment_groups",
-    "NetworkSimulator", "MetricsTracker",
+    "SimConfig", "DAGSchedulingSimulator",
+    "Job", "Task", "TaskState", "TaskStatus",
+    "Machine", "ClusterSnapshot", "MetricsTracker",
+    "SchedulingClass", "WorkloadType", "GpuType",
+    "build_state_vector", "compute_reward",
+    "attribute_global_reward_delay_tree",
 ]

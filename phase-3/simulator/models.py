@@ -1,346 +1,450 @@
 """
-models.py — Dataclasses for the Phase 3 network microsimulator.
+models.py — Core dataclasses for the DAG HNH simulator.
 
-Mirrors phase-1/simulator/models.py:
-   ScheduledFlight  -> Packet              (the static scheduled entity)
-   FlightState      -> PacketState         (its dynamic running state)
-   TailPlan         -> FlowState           (the chain of packets in a TCP flow)
-   Airport          -> Router              (the node where decisions happen)
-   PaxItinerary     -> FragmentGroup       (multi-part deliveries that must
-                                            reassemble — the "passengers
-                                            waiting at the gate" analog)
-   SimEvent / EventType — same shape as Phase 1, just with new event names.
+Domain mapping (analogies to Malladi et al.):
+  Task        ↔  Flight
+  Job (DAG)   ↔  Tail plan (sequence of flights)
+  Upstream    ↔  Incoming delayed flight
+  Downstream  ↔  Departing flight (hold decision point)
+  Hold        ↔  Hold the departing flight at the gate
+  Preempt     ↔  Depart on time (miss the connection)
+  DAG edge    ↔  Passenger itinerary (connecting dependency)
+  SLO_deadline↔  OTP buffer (15-min buffer in aviation)
+  Cluster     ↔  Airline network
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
-# ======================================================================
+# ===========================================================================
 # Enums
-# ======================================================================
-class EventType(Enum):
-    """Discrete event types for the priority queue.
+# ===========================================================================
 
-    Naming mirrors Phase 1 (FLIGHT_DEPARTURE, FLIGHT_ARRIVAL, ...) so the
-    EventEngine pattern from Phase 1 carries over with minimal changes.
-    """
-    PACKET_ARRIVAL = auto()           # packet enters a router queue
-    HNH_DECISION = auto()             # agent must choose a hold τ for a packet
-    PACKET_FORWARD = auto()           # packet leaves queue, transmission starts
-    PACKET_DELIVERED = auto()         # packet arrives at next hop
-    PACKET_DROPPED = auto()           # buffer overflow, TTL expiry, or timeout
-    REASSEMBLY_CHECK = auto()         # check if all fragments / in-order TCP bytes are present
-    TCP_TIMEOUT = auto()              # RTO fires, source retransmits
-    EPISODE_END = auto()              # clean shutdown
+class TaskStatus(Enum):
+    PENDING  = auto()   # waiting on upstream dependency
+    READY    = auto()   # all parents done, resource not yet assigned
+    RUNNING  = auto()   # executing on a machine
+    DONE     = auto()   # completed successfully
+    EVICTED  = auto()   # preempted — resources taken away
+    FAILED   = auto()   # failed permanently
 
+class SchedulingClass(Enum):
+    BEST_EFFORT = 0   # T_sla = 300s
+    BATCH       = 1   # T_sla = 120s
+    MID_TIER    = 2   # T_sla = 30s
+    PRODUCTION  = 3   # T_sla = 0s
 
-class PacketStatus(Enum):
-    SCHEDULED = auto()                # generated at source, not yet at first router
-    QUEUED = auto()                   # in a router buffer awaiting forward
-    HELD = auto()                     # buffer + agent has explicitly held it
-    IN_FLIGHT = auto()                # currently transmitting on a link
-    DELIVERED = auto()                # reached final destination
-    DROPPED = auto()                  # lost (buffer overflow / TTL=0 / timeout)
+class WorkloadType(Enum):
+    TRAINING   = "training"
+    INFERENCE  = "inference"
+    ETL        = "etl"
+    PIPELINE   = "pipeline"
+    SERVING    = "serving"
+    OTHER      = "other"
 
+class GpuType(Enum):
+    V100  = "V100"
+    A100  = "A100"
+    T4    = "T4"
+    P100  = "P100"
+    A10   = "A10"
+    OTHER = "other"
+    NONE  = "none"   # CPU-only task
 
-class DropCause(Enum):
-    NONE = auto()
-    BUFFER_OVERFLOW = auto()
-    TTL_EXPIRED = auto()
-    TIMEOUT = auto()
-
-
-class TCPFlagClass(Enum):
-    """F_p — TCP connection lifecycle class (state vector dim 19).
-    Values match the integer encoding in the Phase 3 state space PDF.
-    """
-    SYN = 0                 # new connection attempt
-    PSH_ACK = 1             # active data
-    FIN_RST = 2             # termination
-    ACK_ONLY = 3            # control / pure ACK
-    NON_TCP = 4             # ICMP, UDP, other
+class HNHDecision(Enum):
+    HOLD   = "hold"
+    NO_HOLD = "no_hold"
 
 
-class ProtocolClass(Enum):
-    """C_p — protocol class (state vector dim 24)."""
-    ICMP = 0
-    DNS = 1
-    TCP_BULK = 2
-    TCP_INTERACTIVE = 3
-    UDP_OTHER = 4
+# ===========================================================================
+# Machine — a single physical node in the cluster
+# ===========================================================================
 
-
-# ======================================================================
-# Static schedule entities (analog of ScheduledFlight)
-# ======================================================================
 @dataclass
-class Packet:
-    """The static, scheduled identity of a packet.
+class Machine:
+    machine_id: str
+    cap_cpu: float          # cores
+    cap_mem: float          # GB
+    cap_gpu: float          # number of GPUs (0 for CPU-only)
+    gpu_type: GpuType = GpuType.NONE
 
-    Created by the generator and immutable thereafter. Per-router
-    runtime state (queue wait, hold decisions, current router) lives in
-    PacketState.
-    """
-    packet_id: str
-    flow_id: str                              # 5-tuple flow this packet belongs to
+    # Dynamic utilisation (updated each tick)
+    used_cpu: float = 0.0
+    used_mem: float = 0.0
+    used_gpu: float = 0.0
+    machine_load_1: float = 0.0   # 1-min load average
+    net_receive_util: float = 0.0  # fraction of link capacity
 
-    # Path through the network (list of router_ids, in order)
-    path: List[str]
+    @property
+    def free_cpu(self) -> float:
+        return max(0.0, self.cap_cpu - self.used_cpu)
 
-    # Source-assigned timestamps (ms since episode start)
-    creation_time: float                      # when the source emitted it
+    @property
+    def free_mem(self) -> float:
+        return max(0.0, self.cap_mem - self.used_mem)
 
-    # Header fields (mirror MAWI pcap fields)
-    size_bytes: int
-    ttl: int                                  # initial IP.ttl at source
-    dscp: int                                 # priority class (0-63)
-    df_flag: bool                             # Don't Fragment
+    @property
+    def free_gpu(self) -> float:
+        return max(0.0, self.cap_gpu - self.used_gpu)
 
-    # Protocol identification
-    protocol_class: ProtocolClass             # C_p — ICMP/TCP-bulk/etc
-    tcp_flag_class: TCPFlagClass              # F_p — SYN/PSH+ACK/etc
+    @property
+    def cpu_util(self) -> float:
+        return self.used_cpu / self.cap_cpu if self.cap_cpu > 0 else 0.0
 
-    # ECN bits (lower 2 bits of IP.tos): 0=not capable, 1/2=ECT, 3=CE
-    ecn_bits: int = 0
+    @property
+    def gpu_util(self) -> float:
+        return self.used_gpu / self.cap_gpu if self.cap_gpu > 0 else 0.0
 
-    # Fragmentation grouping. If part of a fragmented datagram, all
-    # fragments share the same `ip_id` and `frag_total`. `frag_offset`
-    # is the byte offset of THIS fragment within the original datagram.
-    ip_id: int = 0
-    frag_offset: int = 0
-    frag_total: int = 1                       # 1 = not fragmented
+    @property
+    def mem_util(self) -> float:
+        return self.used_mem / self.cap_mem if self.cap_mem > 0 else 0.0
 
-    # TCP-specific (zero/None for non-TCP)
-    tcp_seq: int = 0
-    tcp_ack: int = 0
-    tcp_window: int = 0                       # raw, unnormalised
-    src_port: int = 0
-    dst_port: int = 0
-
-    # Priority score derived from DSCP at generation time, in [0, 1]
-    priority_score: float = 0.0
+    @property
+    def is_idle(self) -> bool:
+        return self.used_cpu == 0.0 and self.used_gpu == 0.0
 
 
-# ======================================================================
-# Runtime per-packet state (analog of FlightState)
-# ======================================================================
+# ===========================================================================
+# Task — one node in a DAG
+# ===========================================================================
+
 @dataclass
-class PacketState:
-    """Dynamic state of one packet as it moves through the network.
+class Task:
+    """Static description of a task. Immutable once generated."""
 
-    Created when the packet is generated and updated as it traverses
-    routers. Each router visit records its own arrival/forward timestamps
-    in `hop_history` so the Delay Tree can reconstruct attribution.
-    """
-    packet: Packet
-    status: PacketStatus = PacketStatus.SCHEDULED
+    task_id: str
+    job_id: str
+    task_index: int            # position within the job DAG (0-based)
 
-    # Current location: index into packet.path. 0 = at first router.
-    current_hop_idx: int = 0
+    # Scheduling attributes
+    scheduling_class: SchedulingClass
+    workload_type: WorkloadType
+    gpu_type: GpuType          # NONE for CPU-only
+    priority: int              # raw [0-11] Borg priority
 
-    # Current TTL (decrements on each forward, like real IP).
-    current_ttl: int = 0                       # initialised in simulator
+    # Resource demands (as fraction of one machine's capacity)
+    plan_cpu: float            # fraction of machine_cpu_cores
+    plan_mem: float            # fraction of machine_mem_gb
+    plan_gpu: float            # fraction of one GPU (0 for CPU-only)
 
-    # Number of times the source has retransmitted this packet
-    retrans_count: int = 0
+    # Actual utilisation (sampled at task creation; stable during run)
+    cpu_usage: float           # fraction of plan_cpu
+    gpu_wrk_util: float        # fraction of plan_gpu
+    avg_mem_usage: float       # fraction of plan_mem
+    max_mem_usage: float       # fraction of plan_mem (peak)
 
-    # Drop tracking
-    drop_cause: DropCause = DropCause.NONE
-    drop_router_id: Optional[str] = None
-    drop_time: Optional[float] = None
+    # Duration model
+    expected_duration_s: float
+    inst_num: int = 1          # number of worker instances
 
-    # Delivery tracking
-    delivery_time: Optional[float] = None      # when it reached the final hop
-    e2e_delay_ms: float = 0.0                  # cumulative delay budget consumed
+    # SLO from scheduling class
+    slo_deadline_s: float = 120.0
 
-    # Per-hop history. One entry per router visited. Each entry is a dict
-    # with keys: router_id, arrival_time, queue_wait_ms, hold_ms,
-    # forward_time, propagation_ms, hnh_decided (bool).
-    # Used by the Delay Tree for reward attribution and by the context
-    # engine for Hop_success, E2E_delay, etc.
-    hop_history: List[dict] = field(default_factory=list)
+    # GPU type one-hot index (for state vector encoding)
+    gpu_type_idx: int = 0
 
-    # ----- Per-router state (transient — overwritten on each router) -----
-    # The "current decision context". Reset when the packet moves to the
-    # next router. Read by the context engine when building the state
-    # vector for the agent.
-    queue_arrival_time: Optional[float] = None
-    queue_wait_ms: float = 0.0                 # Q_delay_p — time waiting at THIS router
-    hold_ms: float = 0.0                       # τ chosen by agent at THIS router
-    hnh_decided: bool = False                  # has the agent acted on this packet here?
-    hnh_action_idx: Optional[int] = None       # which index into hold_actions
-
-    # ----- Convenience properties -----
-    @property
-    def hops_remaining(self) -> int:
-        return max(0, len(self.packet.path) - self.current_hop_idx - 1)
+    # Workload type one-hot index
+    workload_type_idx: int = 0
 
     @property
-    def hops_completed(self) -> int:
-        # Number of routers this packet has fully traversed (forwarded out).
-        return self.current_hop_idx
+    def is_gpu_task(self) -> bool:
+        return self.plan_gpu > 0.0
 
     @property
-    def current_router_id(self) -> Optional[str]:
-        if 0 <= self.current_hop_idx < len(self.packet.path):
-            return self.packet.path[self.current_hop_idx]
-        return None
-
-    @property
-    def next_router_id(self) -> Optional[str]:
-        nxt = self.current_hop_idx + 1
-        if 0 <= nxt < len(self.packet.path):
-            return self.packet.path[nxt]
-        return None
-
-    @property
-    def is_terminal_hop(self) -> bool:
-        return self.current_hop_idx >= len(self.packet.path) - 1
+    def resource_cost_score(self) -> float:
+        """Composite resource opportunity cost (λ weights from SimConfig)."""
+        # λ_gpu=0.6, λ_cpu=0.25, λ_mem=0.15 — GPU-heavy ML cluster defaults
+        return 0.6 * self.plan_gpu + 0.25 * self.plan_cpu + 0.15 * self.plan_mem
 
 
-# ======================================================================
-# Flow (analog of TailPlan: groups packets that share state / dependencies)
-# ======================================================================
 @dataclass
-class FlowState:
-    """A 5-tuple TCP flow (or pseudo-flow for UDP/ICMP).
+class TaskState:
+    """Dynamic runtime state of a task. Mutated during the episode."""
 
-    Tracks aggregate per-flow stats used in the state vector:
-    Flow_age, Flow_success, Pkt_inflight, RTT_est, Seq_gap, ACK_gap.
+    task: Task
 
-    For TCP flows, the FlowState also tracks expected next sequence
-    number to detect out-of-order delivery (Seq_gap).
-    """
-    flow_id: str                                  # canonical 5-tuple string
-    src_ip: str
-    dst_ip: str
-    src_port: int
-    dst_port: int
-    protocol_class: ProtocolClass
+    status: TaskStatus = TaskStatus.PENDING
+    machine_id: Optional[str] = None
 
-    first_seen_time: Optional[float] = None       # when the first packet of this flow appeared
-    packet_ids: List[str] = field(default_factory=list)
+    # Timestamps (in simulated seconds from episode start)
+    submit_time: float = 0.0
+    scheduled_start_s: float = 0.0   # planned start (from DAG scheduling)
+    actual_start_s: Optional[float] = None
+    actual_end_s: Optional[float] = None
 
-    # Per-flow counters (for Flow_success)
-    packets_arrived: int = 0
-    packets_forwarded: int = 0
-    packets_dropped: int = 0
-    packets_delivered: int = 0
-    packets_inflight: int = 0                     # currently between routers
+    # Delay tree variables (§6)
+    departure_delay_s: float = 0.0   # D_k: actual_start - scheduled_start
+    arrival_delay_s: float   = 0.0   # A_k: actual_end - expected_end
+    hold_duration_s: float   = 0.0   # H_k: hold applied by agent
+    ground_delay_s: float    = 0.0   # GD_k: queue wait excluding hold
 
-    # TCP sequence tracking (zero for non-TCP)
-    expected_next_seq: int = 0
-    max_received_seq: int = 0
-    ack_gap: int = 0
+    # Intrinsic slowdown (the event that triggers HNH)
+    has_intrinsic_delay: bool = False
+    intrinsic_delay_s: float  = 0.0
 
-    # RTT estimation (rolling)
-    rtt_samples_ms: List[float] = field(default_factory=list)
-    rtt_est_ms: float = 0.0
+    # HNH decision tracking
+    hnh_decided: bool = False
+    hnh_action_idx: int = 0          # index into hold_actions_s
 
-    # Last RTO timeout firing time (None if never)
-    last_timeout_time: Optional[float] = None
+    # Influence index (set post-episode by reward engine)
+    rho_h_a: float = 0.0
 
-
-# ======================================================================
-# Fragment group (analog of PaxItinerary — the "connecting passengers")
-# ======================================================================
-@dataclass
-class FragmentGroup:
-    """All fragments of one fragmented IP datagram.
-
-    The fragment-level analog of PaxItinerary in Phase 1: a group of
-    sub-units that must arrive together for the whole "message" to be
-    successfully delivered.
-
-    `Msg_complete` in the state vector is computed over these groups.
-    """
-    ip_id: int
-    src_ip: str
-    dst_ip: str
-    expected_count: int                           # frag_total
-    arrived_packet_ids: List[str] = field(default_factory=list)
-    completion_time: Optional[float] = None
-    abandoned: bool = False                       # true if any sibling was dropped
+    # Restart count (for reward penalty)
+    restart_count: int = 0
 
     @property
-    def is_complete(self) -> bool:
-        return len(self.arrived_packet_ids) >= self.expected_count
+    def expected_end_s(self) -> Optional[float]:
+        if self.actual_start_s is None:
+            return None
+        return self.actual_start_s + self.task.expected_duration_s
 
     @property
-    def missing_count(self) -> int:
-        return max(0, self.expected_count - len(self.arrived_packet_ids))
+    def is_terminal(self) -> bool:
+        return self.status in (TaskStatus.DONE, TaskStatus.FAILED)
 
-
-# ======================================================================
-# Router (analog of Airport)
-# ======================================================================
-@dataclass
-class Router:
-    """A network node that queues, holds, drops, and forwards packets.
-
-    The router is the *location* where HNH decisions happen — exactly
-    like an airport in Phase 1 where flights are held at the gate.
-    """
-    router_id: str                                # e.g. "H1"
-    ip_address: str = ""                          # for cosmetic / logging only
-    is_silent: bool = False                       # asterisk hops in traceroute
-
-    buffer_capacity_bytes: int = 256 * 1024
-    buffer_used_bytes: int = 0
-
-    # The active queue: ordered list of packet_ids currently buffered here.
-    # FIFO order by default; the simulator may re-order when explicitly
-    # holding a specific packet.
-    queue: List[str] = field(default_factory=list)
-
-    # Per-router rolling counters (for state-vector dims like Q_local_drop,
-    # Hold_count, Drain_rate, Local_arr_rate, T_last_fwd, Jitter).
-    # The simulator updates these on each event; the context engine reads.
-    drops_in_window: List[Tuple[float, str]] = field(default_factory=list)  # (time, packet_id)
-    forwards_in_window: List[Tuple[float, str]] = field(default_factory=list)
-    arrivals_in_window: List[Tuple[float, str]] = field(default_factory=list)
-    queue_length_samples: List[Tuple[float, int]] = field(default_factory=list)
-    rtt_samples_in_window: List[Tuple[float, float]] = field(default_factory=list)
-    last_forward_time: float = 0.0
-
-    # Active holds — set of packet_ids in `queue` that the agent has
-    # explicitly chosen to hold (vs. those merely waiting their turn).
-    holds: Dict[str, float] = field(default_factory=dict)        # packet_id -> tau_ms
-
-    # Next time the outgoing link is free for transmission. Used to
-    # serialise packets through the link — without this, every packet
-    # gets scheduled independently and the queue is meaningless.
-    # Updated each time a packet is scheduled to forward.
-    next_available_slot: float = 0.0
-
-    # ----- Convenience -----
     @property
-    def buffer_utilization(self) -> float:
-        if self.buffer_capacity_bytes <= 0:
+    def completion_delay_s(self) -> float:
+        """Total delay to final destination (analog of δ_i in the paper)."""
+        if self.actual_end_s is None:
             return 0.0
-        return self.buffer_used_bytes / self.buffer_capacity_bytes
+        expected = self.scheduled_start_s + self.task.expected_duration_s
+        return max(0.0, self.actual_end_s - expected)
+
+
+# ===========================================================================
+# Job — a DAG of tasks
+# ===========================================================================
+
+@dataclass
+class Job:
+    """Static structure of a job (DAG of tasks)."""
+
+    job_id: str
+    tasks: Dict[str, Task]              # task_id -> Task
+    edges: List[Tuple[str, str]]        # (parent_task_id, child_task_id)
+
+    # Scheduling attributes inherited from the job
+    scheduling_class: SchedulingClass
+    workload_type: WorkloadType
+    arrival_time_s: float
+    job_deadline_s: float               # hard SLO for the whole job
+
+    # Cached graph properties (computed once after creation)
+    _parents: Dict[str, Set[str]] = field(default_factory=dict)
+    _children: Dict[str, Set[str]] = field(default_factory=dict)
+    _depth: Dict[str, int] = field(default_factory=dict)
+    _total_descendants: Dict[str, int] = field(default_factory=dict)
+    _critical_path_len: Dict[str, float] = field(default_factory=dict)
+    _slack_time: Dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self._build_graph_cache()
 
     @property
-    def queue_length(self) -> int:
-        return len(self.queue)
+    def job_size(self) -> int:
+        return len(self.tasks)
 
-    @property
-    def is_full(self) -> bool:
-        return self.buffer_used_bytes >= self.buffer_capacity_bytes
+    def _build_graph_cache(self):
+        """Pre-compute parents, children, depths, descendants, critical path."""
+        task_ids = list(self.tasks.keys())
+        self._parents = {tid: set() for tid in task_ids}
+        self._children = {tid: set() for tid in task_ids}
+
+        for parent_id, child_id in self.edges:
+            if parent_id in self._children:
+                self._children[parent_id].add(child_id)
+            if child_id in self._parents:
+                self._parents[child_id].add(parent_id)
+
+        # Topological sort (Kahn's algorithm)
+        in_degree = {tid: len(self._parents[tid]) for tid in task_ids}
+        queue = [tid for tid in task_ids if in_degree[tid] == 0]
+        topo_order = []
+        while queue:
+            node = queue.pop(0)
+            topo_order.append(node)
+            for child in self._children.get(node, set()):
+                in_degree[child] -= 1
+                if in_degree[child] == 0:
+                    queue.append(child)
+
+        # Depth (topological level from source nodes)
+        depth = {tid: 0 for tid in task_ids}
+        for tid in topo_order:
+            for child in self._children.get(tid, set()):
+                depth[child] = max(depth[child], depth[tid] + 1)
+        self._depth = depth
+
+        # Total descendants (count via reverse topological order)
+        desc = {tid: 0 for tid in task_ids}
+        for tid in reversed(topo_order):
+            for child in self._children.get(tid, set()):
+                desc[tid] += 1 + desc[child]
+        self._total_descendants = desc
+
+        # Critical path length (forward pass on expected durations)
+        earliest_start = {tid: 0.0 for tid in task_ids}
+        for tid in topo_order:
+            dur = self.tasks[tid].expected_duration_s
+            for child in self._children.get(tid, set()):
+                earliest_start[child] = max(
+                    earliest_start[child],
+                    earliest_start[tid] + dur
+                )
+        # Critical path len for each task = remaining duration from that task
+        crit = {}
+        for tid in task_ids:
+            # longest path from this task to any sink
+            crit[tid] = self._longest_path_from(tid)
+        self._critical_path_len = crit
+
+        # Slack time (latest_start - earliest_start)
+        # Latest start: backward pass
+        latest_start = {tid: self.job_deadline_s for tid in task_ids}
+        for tid in reversed(topo_order):
+            dur = self.tasks[tid].expected_duration_s
+            for child in self._children.get(tid, set()):
+                latest_start[tid] = min(
+                    latest_start[tid],
+                    latest_start[child] - dur
+                )
+        slack = {}
+        for tid in task_ids:
+            slack[tid] = max(0.0, latest_start[tid] - earliest_start[tid])
+        self._slack_time = slack
+
+    def _longest_path_from(self, start_id: str) -> float:
+        """DFS to find the longest path (in seconds) from start_id to any sink."""
+        visited: Dict[str, float] = {}
+
+        def dfs(tid: str) -> float:
+            if tid in visited:
+                return visited[tid]
+            dur = self.tasks[tid].expected_duration_s
+            children = self._children.get(tid, set())
+            if not children:
+                visited[tid] = dur
+                return dur
+            result = dur + max(dfs(c) for c in children)
+            visited[tid] = result
+            return result
+
+        return dfs(start_id)
+
+    def get_parents(self, task_id: str) -> Set[str]:
+        return self._parents.get(task_id, set())
+
+    def get_children(self, task_id: str) -> Set[str]:
+        return self._children.get(task_id, set())
+
+    def get_depth(self, task_id: str) -> int:
+        return self._depth.get(task_id, 0)
+
+    def get_total_descendants(self, task_id: str) -> int:
+        return self._total_descendants.get(task_id, 0)
+
+    def get_critical_path_len(self, task_id: str) -> float:
+        return self._critical_path_len.get(task_id, 0.0)
+
+    def get_slack_time(self, task_id: str) -> float:
+        return self._slack_time.get(task_id, 0.0)
+
+    def is_on_critical_path(self, task_id: str) -> bool:
+        return self.get_slack_time(task_id) == 0.0
+
+    def max_depth(self) -> int:
+        return max(self._depth.values()) if self._depth else 0
+
+    def completed_tasks(self, task_states: Dict[str, TaskState]) -> int:
+        return sum(
+            1 for tid in self.tasks
+            if task_states.get(tid) and task_states[tid].status == TaskStatus.DONE
+        )
 
 
-# ======================================================================
-# Discrete event (mirrors phase-1/simulator/models.SimEvent)
-# ======================================================================
-@dataclass(order=True)
-class SimEvent:
-    time: float
-    seq: int = field(default=0, compare=True)         # tiebreaker for stability
-    event_type: EventType = field(default=EventType.PACKET_ARRIVAL, compare=False)
-    packet_id: Optional[str] = field(default=None, compare=False)
-    router_id: Optional[str] = field(default=None, compare=False)
-    flow_id: Optional[str] = field(default=None, compare=False)
-    extras: dict = field(default_factory=dict, compare=False)
+# ===========================================================================
+# Cluster snapshot — global state at a given tick
+# ===========================================================================
+
+@dataclass
+class ClusterSnapshot:
+    """Global cluster metrics. Updated every tick via rolling window."""
+
+    # Resource capacity totals
+    total_cpu_capacity: float = 0.0
+    total_gpu_capacity: float = 0.0
+    total_mem_capacity: float = 0.0
+    total_machines: int = 0
+
+    # Current utilisation (rolling)
+    cpu_util: float = 0.0
+    gpu_util: float = 0.0
+    machine_load_avg: float = 0.0
+    network_receive_util: float = 0.0
+    num_idle_machines: int = 0
+
+    # Task queue state
+    num_pending_tasks: int = 0
+    num_running_tasks: int = 0
+
+    # Rolling window metrics (24h)
+    failed_task_rate_g: float = 0.0
+    global_pipeline_utility_g: float = 1.0
+    global_operator_utility_g: float = 1.0
+
+
+# ===========================================================================
+# Episode metrics tracker
+# ===========================================================================
+
+@dataclass
+class MetricsTracker:
+    """Accumulates episode-level statistics for evaluation."""
+
+    total_jobs: int = 0
+    total_tasks: int = 0
+    completed_tasks: int = 0
+    failed_tasks: int = 0
+    evicted_tasks: int = 0
+
+    # HNH decisions
+    hold_decisions: int = 0
+    no_hold_decisions: int = 0
+    holds_that_saved_pipeline: int = 0   # hold → pipeline completed
+    holds_that_wasted_resources: int = 0  # hold → pipeline still failed
+
+    # Delay tracking
+    total_departure_delay_s: float = 0.0
+    total_arrival_delay_s: float   = 0.0
+    total_pipeline_stalls: int = 0        # "missed connections"
+    pipelines_saved_by_hold: int = 0
+
+    # Reward tracking
+    total_reward: float = 0.0
+    episode_steps: int = 0
+
+    def reset(self):
+        for f in self.__dataclass_fields__:
+            setattr(self, f, type(getattr(self, f))())
+
+    def summary(self) -> dict:
+        total_hnh = max(self.hold_decisions + self.no_hold_decisions, 1)
+        total_t = max(self.total_tasks, 1)
+        return {
+            "total_jobs":          self.total_jobs,
+            "total_tasks":         self.total_tasks,
+            "completed_pct":       round(100 * self.completed_tasks / total_t, 2),
+            "failed_pct":          round(100 * self.failed_tasks / total_t, 2),
+            "evicted_pct":         round(100 * self.evicted_tasks / total_t, 2),
+            "hold_rate_pct":       round(100 * self.hold_decisions / total_hnh, 2),
+            "pipelines_saved":     self.pipelines_saved_by_hold,
+            "pipeline_stalls":     self.total_pipeline_stalls,
+            "avg_departure_delay_s": round(
+                self.total_departure_delay_s / max(self.hold_decisions, 1), 2),
+            "total_reward":        round(self.total_reward, 4),
+            "episode_steps":       self.episode_steps,
+        }

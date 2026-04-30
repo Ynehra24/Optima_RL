@@ -1,12 +1,13 @@
 """
-config.py — All simulation hyperparameters for Phase 3 (Network HNH).
+config.py — SimConfig for the Phase 3 DAG Hold-or-Not-Hold simulator.
 
-Mirrors phase-1/simulator/config.py and phase-2/simulator/config.py, but
-with knobs calibrated to network timescales (milliseconds, not minutes)
-and dataset values from MAWI 202601011400.pcap and RIPE Atlas
-measurements (msm_id 5001, 1001).
+Grounded in Google Borg 2019 + Alibaba PAI 2020 cluster characteristics.
+All numeric defaults are calibrated to realistic cluster behaviour
+so the A2C agent faces a non-trivial learning problem.
 
-All time values are in MILLISECONDS unless noted. All sizes are in BYTES.
+Tunable knobs are grouped by concern so it is easy to sweep
+the reward hyperparameters (α, β, λ, B_thresh) independently
+of the topology and arrival-rate parameters.
 """
 
 from __future__ import annotations
@@ -16,214 +17,232 @@ from typing import List, Tuple
 
 @dataclass
 class SimConfig:
-    # -----------------------------------------------------------------
-    # Episode / clock
-    # -----------------------------------------------------------------
-    # An episode is one simulated "second" of network traffic. At MAWI's
-    # 167,774 pkt/s baseline this means ~167K packets per episode if every
-    # packet were tracked, but in practice we sub-sample (see
-    # `decision_trigger_*` knobs below) so the agent only acts on a
-    # tractable fraction.
-    episode_duration_ms: float = 1000.0          # 1 simulated second
+    # ------------------------------------------------------------------
+    # Reproducibility
+    # ------------------------------------------------------------------
     random_seed: int = 42
 
-    # -----------------------------------------------------------------
-    # Topology — default is the 12-hop linear chain from the RIPE trace
-    # -----------------------------------------------------------------
-    num_routers: int = 12
-    # If True, build a single linear path H1 -> H2 -> ... -> H_num_routers.
-    # If False, the simulator expects an explicit topology dict (DAG).
-    linear_topology: bool = True
+    # ------------------------------------------------------------------
+    # Episode length
+    # ------------------------------------------------------------------
+    # One episode = one "week" of cluster time, matching the paper.
+    # Simulated seconds. 7 days × 86400 s/day.
+    episode_duration_s: float = 7 * 86_400.0
 
-    # Per-router buffer capacity in BYTES. Real Cisco/Juniper routers
-    # typically size buffers at ~50ms x line-rate. At 1Gbps that's
-    # ~6.25 MB. We use a much smaller value so congestion happens
-    # frequently enough to learn from in a 1-second episode. This is
-    # the network analog of the "small hub" Phase-2 calibration —
-    # synthetic stress so the agent sees decisions that matter.
-    # Tuned so baseline `no_hold` lands in the 3-15% drop range, which
-    # mirrors Phase 1's ~3-5.5% baseline missed-connection rate.
-    buffer_capacity_bytes: int = 128 * 1024      # 128 KB per router
+    # ------------------------------------------------------------------
+    # Cluster topology
+    # ------------------------------------------------------------------
+    # Number of machines in the synthetic cluster.
+    # Calibrated from Borg trace: ~12,500 machines in a cell.
+    # We use a scaled-down version for simulator tractability.
+    num_machines: int = 500
 
-    # Router processing delay (fixed, hardware-bound). Excluded from the
-    # state vector per the PDF (it's a constant, not an observable),
-    # but the simulator still adds it to per-hop latency.
-    processing_delay_ms: float = 0.05
+    # Per-machine resource capacity (matching Borg/Alibaba medians)
+    machine_cpu_cores: float = 32.0        # cores per machine
+    machine_mem_gb: float   = 128.0        # GB per machine
+    machine_gpu_count: float = 4.0         # GPUs per machine (0 for CPU-only)
 
-    # -----------------------------------------------------------------
-    # Link characteristics — calibrated to MAWI backbone trace
-    # -----------------------------------------------------------------
-    # MAWI 202601011400 reports 811.52 Mbps avg. We round up to 1 Gbps
-    # link capacity, which means transmission time for a 1500-byte
-    # packet is ~12 microseconds.
-    link_bandwidth_mbps: float = 1000.0
-    # Per-hop propagation delay (ms). RIPE traceroute shows hop-1 RTT
-    # ~0.58 ms, hop-2 ~1.45 ms, hop-3 ~3.32 ms — so per-hop one-way
-    # propagation is ~0.5-1.5 ms. We use 1.0 ms with some jitter.
-    propagation_delay_mean_ms: float = 1.0
-    propagation_delay_stddev_ms: float = 0.3
+    # Fraction of machines that have GPUs (rest are CPU-only).
+    # Alibaba GPU cluster: ~30% of machines have GPUs.
+    gpu_machine_fraction: float = 0.30
 
-    # -----------------------------------------------------------------
-    # Packet generation — MAWI calibration
-    # -----------------------------------------------------------------
-    # Mean packet size (bytes). MAWI reports 604.68 bytes overall;
-    # per-protocol means are TCP=955.80, ICMP=66.46, HTTPS=1623.55.
-    # The generator samples per-protocol sizes; this is a fallback.
-    packet_size_mean_bytes: float = 604.68
-    packet_size_stddev_bytes: float = 400.0
+    # ------------------------------------------------------------------
+    # Job / DAG arrival process
+    # ------------------------------------------------------------------
+    # Mean inter-arrival time between jobs (seconds).
+    # Borg: ~1 job per 2-3 seconds at peak; we use a moderate rate.
+    job_arrival_rate_per_s: float = 0.5   # jobs/second
 
-    # Protocol mix from MAWI (rounded to sum to 1.0).
-    # Order: TCP-bulk, TCP-interactive, UDP, ICMP, IPSec/other.
-    # Mapped onto the Phase 3 C_p classes (0=ICMP, 1=DNS, 2=TCP-bulk,
-    # 3=TCP-interactive, 4=UDP/other) via `protocol_class_map`.
-    protocol_mix: Tuple[float, ...] = (
-        0.30,    # TCP-bulk (HTTP/HTTPS/FTP)  -> C_p=2
-        0.04,    # TCP-interactive (SSH/BGP)  -> C_p=3
-        0.23,    # UDP/other                  -> C_p=4
-        0.26,    # ICMP                       -> C_p=0
-        0.17,    # other (IPSec, DNS, ...)    -> C_p=1 or 4
+    # Job size distribution: (num_tasks, probability) pairs.
+    # Calibrated from Alibaba pai_task_table: most jobs are small.
+    job_size_distribution: List[Tuple[int, float]] = field(default_factory=lambda: [
+        (1,  0.25),   # single-task jobs (no DAG)
+        (2,  0.20),
+        (3,  0.15),
+        (5,  0.15),
+        (8,  0.10),
+        (12, 0.08),
+        (20, 0.05),
+        (50, 0.02),
+    ])
+
+    # DAG topology style: (style, probability).
+    # "chain"   — linear A→B→C→…
+    # "funnel"  — many tasks merge into one
+    # "fan_out" — one task feeds many parallel tasks
+    # "diamond" — merge then split then merge again
+    # "random"  — Erdős–Rényi random DAG (realistic)
+    dag_topology_distribution: List[Tuple[str, float]] = field(default_factory=lambda: [
+        ("chain",    0.30),
+        ("fan_out",  0.20),
+        ("funnel",   0.15),
+        ("diamond",  0.15),
+        ("random",   0.20),
+    ])
+
+    # ------------------------------------------------------------------
+    # Task duration and delay model
+    # ------------------------------------------------------------------
+    # Task duration in seconds: log-normal (shape, scale).
+    # Alibaba: median ~300s, long tail to ~3600s.
+    task_duration_lognormal_mu: float    = 5.7    # ln(300) ≈ 5.7
+    task_duration_lognormal_sigma: float = 1.2
+
+    # Intrinsic delay probability — fraction of tasks that experience
+    # a hardware/software slowdown that triggers an HNH decision.
+    # This is the core "event" that drives the problem.
+    task_delay_probability: float = 0.12   # ~12% of tasks get delayed
+
+    # Delay magnitude when it occurs: (mean_s, stddev_s).
+    task_delay_mean_s:   float = 120.0    # 2 min average delay
+    task_delay_stddev_s: float = 90.0     # high variance
+
+    # ------------------------------------------------------------------
+    # Scheduling classes (Borg 4-class model)
+    # ------------------------------------------------------------------
+    # (class_id, fraction_of_jobs, T_sla_s, eviction_priority_name)
+    # class 3 = production (latency-sensitive, T_sla=0s)
+    # class 2 = mid-tier (T_sla=30s)
+    # class 1 = batch (T_sla=120s)
+    # class 0 = best-effort (T_sla=300s)
+    scheduling_class_distribution: List[Tuple[int, float, float, str]] = field(
+        default_factory=lambda: [
+            (3, 0.15, 0.0,   "production"),
+            (2, 0.25, 30.0,  "mid_tier"),
+            (1, 0.40, 120.0, "batch"),
+            (0, 0.20, 300.0, "best_effort"),
+        ]
     )
 
-    # DSCP distribution. Most internet traffic is best-effort (DSCP=0).
-    # A small fraction is EF (DSCP=46, voice) or AF (DSCP=10/18/26/34).
-    dscp_default: int = 0
-    dscp_priority_fraction: float = 0.05         # 5% of packets are priority
+    # ------------------------------------------------------------------
+    # Workload types (Alibaba 6-class model)
+    # ------------------------------------------------------------------
+    workload_type_distribution: List[Tuple[str, float]] = field(default_factory=lambda: [
+        ("training",   0.35),
+        ("inference",  0.20),
+        ("etl",        0.15),
+        ("pipeline",   0.12),
+        ("serving",    0.10),
+        ("other",      0.08),
+    ])
 
-    # TTL initial distribution. Common defaults are 64 (Linux), 128
-    # (Windows), 255 (some routers). RIPE sample showed ttl=253.
-    ttl_default: int = 64
-    ttl_distribution: Tuple[Tuple[int, float], ...] = (
-        (64, 0.55),
-        (128, 0.30),
-        (255, 0.15),
-    )
+    # ------------------------------------------------------------------
+    # GPU type distribution (for gpu_type_spec one-hot[6])
+    # ------------------------------------------------------------------
+    gpu_type_distribution: List[Tuple[str, float]] = field(default_factory=lambda: [
+        ("V100", 0.30),
+        ("A100", 0.25),
+        ("T4",   0.20),
+        ("P100", 0.15),
+        ("A10",  0.07),
+        ("other", 0.03),
+    ])
 
-    # Fragmentation rate from MAWI (~0.67% of packets fragmented).
-    fragment_rate: float = 0.0067
-    fragments_per_datagram_mean: int = 3         # avg fragments when fragmenting
+    # ------------------------------------------------------------------
+    # Resource demand distributions (per task, as fraction of machine)
+    # ------------------------------------------------------------------
+    # CPU: fraction of one machine's cores requested.
+    # Alibaba: median ~0.1 (small tasks), tail to 0.8 (large ML jobs).
+    task_cpu_demand_mean: float   = 0.12
+    task_cpu_demand_stddev: float = 0.15
 
-    # Packet arrival rate (packets per ms). MAWI's full backbone trace
-    # baseline is ~168 pkt/ms across a 1 Gbps link — that's effectively
-    # 100% line-rate, which makes every queue spike turn into a flood
-    # of drops. For a learnable simulator we run well below saturation
-    # by default, which still produces meaningful queue dynamics and
-    # occasional drops while leaving slack the agent can exploit.
-    #
-    # 22 pkt/ms was chosen empirically: under `no_hold` baseline this
-    # gives a ~7% drop rate, which mirrors Phase 1's 3-5.5% baseline
-    # missed-connection rate. `random` policy collapses to ~70% drop
-    # showing that holds carry real cost. Set to ~168 to recreate the
-    # MAWI worst-case load.
-    arrival_rate_pkt_per_ms: float = 22.0
+    # Memory: fraction of one machine's memory.
+    task_mem_demand_mean: float   = 0.10
+    task_mem_demand_stddev: float = 0.12
 
-    # Burstiness: MAWI CoV is 44.4%. We use a Poisson process for v1
-    # (CoV=1) but allow a future shaper. The Burst_flag in the state
-    # vector still fires whenever instantaneous rate exceeds mean+1*sigma.
-    burst_stddev_factor: float = 0.444
+    # GPU: fraction of one GPU requested (0 for non-GPU tasks).
+    # 70% of tasks on the GPU cluster request at least some GPU.
+    task_gpu_demand_mean: float   = 0.50
+    task_gpu_demand_stddev: float = 0.30
+    task_gpu_request_probability: float = 0.65
 
-    # -----------------------------------------------------------------
-    # HNH action space
-    # -----------------------------------------------------------------
-    # Hold durations in milliseconds. Cardinality 7, matching Phase 1/2
-    # so the A2C network architecture (input: state_dim -> output: 7)
-    # is reusable.
-    hold_actions: Tuple[int, ...] = (0, 1, 2, 5, 10, 20, 50)
+    # ------------------------------------------------------------------
+    # Actual utilisation vs requested (the "plan vs actual" split)
+    # ------------------------------------------------------------------
+    # When a task is running, actual usage = plan × utilisation_factor.
+    # Alibaba shows typical utilisation at 40-60% of requested.
+    cpu_utilisation_factor_mean: float   = 0.50
+    cpu_utilisation_factor_stddev: float = 0.20
+    gpu_utilisation_factor_mean: float   = 0.55
+    gpu_utilisation_factor_stddev: float = 0.25
+    mem_utilisation_factor_mean: float   = 0.65  # memory is stickier
+    mem_utilisation_factor_stddev: float = 0.15
 
-    # -----------------------------------------------------------------
-    # Decision triggering (sub-sampling)
-    # -----------------------------------------------------------------
-    # At ~168K pkt/s, making an HNH decision per packet is intractable.
-    # We trigger HNH decisions only when one of these conditions holds.
-    # Set `decide_every_packet=True` to override (useful for unit tests).
-    decide_every_packet: bool = False
+    # ------------------------------------------------------------------
+    # Global cluster metrics (rolling baseline)
+    # ------------------------------------------------------------------
+    # Rolling window for global PU / OPU / failed_task_rate_G.
+    # Matches the paper: W = 24 hours.
+    global_window_s: float = 24 * 3600.0
 
-    # Trigger if router buffer utilization fraction exceeds this.
-    decision_trigger_buf_util: float = 0.50
+    # Target cluster utilisation at steady state (used for calibration).
+    # Borg: ~60% average CPU, ~40% GPU.
+    target_cpu_util: float = 0.60
+    target_gpu_util: float = 0.40
 
-    # Trigger if the packet has waiting predecessors (N_in > 0).
-    decision_trigger_on_predecessors: bool = True
+    # Network receive utilisation (fraction of link capacity).
+    # ML clusters: high network load during gradient sync.
+    network_util_mean: float   = 0.45
+    network_util_stddev: float = 0.15
 
-    # Trigger if packet TTL is critically low.
-    decision_trigger_ttl_threshold: int = 4
+    # ------------------------------------------------------------------
+    # Action space
+    # ------------------------------------------------------------------
+    # Discrete hold durations in seconds. Maps directly to A2C output.
+    # {0, 15, 30, 60, 120} from the spec table.
+    hold_actions_s: List[int] = field(default_factory=lambda: [0, 15, 30, 60, 120])
 
-    # -----------------------------------------------------------------
-    # Utility / disutility constants  (mirror of Phase 1's delta_p / delta_f)
-    # -----------------------------------------------------------------
-    # Per-protocol latency budget L_proto (ms). A packet with E2E_delay
-    # exceeding L_proto starts incurring full disutility.
-    # Indexed by C_p class: 0=ICMP, 1=DNS, 2=TCP-bulk, 3=TCP-interactive, 4=UDP
-    latency_budget_per_class_ms: Tuple[float, ...] = (
-        100.0,   # ICMP — tolerant
-        200.0,   # DNS  — somewhat tolerant
-        500.0,   # TCP-bulk (HTTP downloads) — most tolerant
-         50.0,   # TCP-interactive (SSH/BGP) — strict
-        150.0,   # UDP/other (often streaming) — moderate
-    )
+    # For DDPG (continuous): max hold = 120s.
+    hold_max_s: float = 120.0
 
-    # Delta_R: normalising constant for link utility (= max acceptable
-    # extra latency a hold can introduce before LL drops to 0). Phase 1
-    # uses 30 minutes; here we use 50 ms to match the maximum hold action.
-    delta_R_ms: float = 50.0
-
-    # Delta_P: normalising constant for delivery utility (= max latency
-    # before delivery utility hits zero floor).
-    delta_P_ms: float = 200.0
-
-    # On-time threshold (analog of Phase 1's 15-minute threshold).
-    # A packet with E2E_delay <= this is considered "on-time" and
-    # contributes 1.0 to delivery utility regardless of small overruns.
-    ontime_threshold_ms: float = 10.0
-
-    # Congestion penalty in LL(τ): when BG > BG_threshold,
-    # LL(τ) -= lambda_congestion * (BG - BG_threshold) * τ / 50
-    BG_threshold: float = 0.80
-    lambda_congestion: float = 0.5
-
-    # -----------------------------------------------------------------
-    # Reward weights (passed through to the reward calculator)
-    # -----------------------------------------------------------------
-    # alpha: trade-off between Delivery Utility (DU/CG) and Link Utility
-    # (LU/OG). Higher alpha = prioritise delivery over throughput.
+    # ------------------------------------------------------------------
+    # Reward hyperparameters (tunable, match paper defaults)
+    # ------------------------------------------------------------------
+    # α: pipeline utility vs cluster efficiency weight.
+    # α=1 → maximise downstream completion; α=0 → maximise cluster OTP.
     alpha: float = 0.75
-    # beta: trade-off between local and global rewards.
+
+    # β: local vs global reward weight.
+    # β=1 → only care about this task; β=0 → only care about global.
     beta: float = 0.75
 
-    # -----------------------------------------------------------------
-    # Global window for rolling stats — DRAMATICALLY shorter than P1/P2
-    # -----------------------------------------------------------------
-    # Phase 1 uses W=24 hours. Network timescales are ~5 orders of
-    # magnitude faster, so W=1000 ms = 1 second.
-    global_window_ms: float = 1000.0
+    # λ: GPU congestion sensitivity in OL(τ).
+    lam: float = 0.30
 
-    # -----------------------------------------------------------------
-    # TCP flow modelling
-    # -----------------------------------------------------------------
-    # Default RTO (retransmission timeout) for TCP flows in ms. Real TCP
-    # adapts RTO from RTT samples; we use a simple fixed value for v1.
-    tcp_rto_ms: float = 200.0
-    tcp_default_mss: int = 1460                  # MSS from MAWI sample
+    # B_thresh: GPU utilisation above which congestion penalty fires.
+    b_thresh: float = 0.85
 
-    # TCP receive window default (bytes). 65535 is the un-scaled max.
-    tcp_default_window: int = 65535
+    # ∆C: normalising constant for task disutility (max tolerable delay, s).
+    delta_c: float = 600.0
 
-    # -----------------------------------------------------------------
-    # Head-of-Line blocking detection
-    # -----------------------------------------------------------------
-    # HOL_flag fires if front-of-queue packet has been waiting > this
-    # multiple of its protocol's latency budget AND queue length > 1.
-    hol_threshold_factor: float = 2.0
+    # ∆F: normalising constant for operator utility (max flight delay).
+    delta_f: float = 300.0
 
-    # -----------------------------------------------------------------
-    # Sliding-window helpers
-    # -----------------------------------------------------------------
-    # Width of the very-short rolling window used for dQ_dt and
-    # Drain_rate / Local_arr_rate. Short enough to track instantaneous
-    # bursts, long enough to smooth single-packet noise.
-    fast_window_ms: float = 10.0
+    # ------------------------------------------------------------------
+    # State vector embedding sizes
+    # ------------------------------------------------------------------
+    # job_id embedding dimension. We fix at 8 dims for the simulator
+    # (rather than the 8-16 range in the doc) to remove ambiguity.
+    job_id_embedding_dim: int = 8
 
+    # ------------------------------------------------------------------
+    # Simulator clock
+    # ------------------------------------------------------------------
+    # Simulation tick resolution in seconds.
+    # HNH decisions happen at integer seconds.
+    tick_s: float = 1.0
 
-# Convenience: protocol class names for debugging output
-PROTOCOL_CLASS_NAMES = ("ICMP", "DNS", "TCP-bulk", "TCP-interactive", "UDP-other")
+    # Maximum number of HNH decisions per episode before truncation.
+    # Prevents infinite loops in degenerate cases.
+    max_hnh_decisions: int = 50_000
 
-# Mapping from the protocol_mix tuple index -> C_p class id
-PROTOCOL_MIX_TO_CLASS = (2, 3, 4, 0, 1)
+    # ------------------------------------------------------------------
+    # Instance count (inst_num from Alibaba)
+    # ------------------------------------------------------------------
+    inst_num_distribution: List[Tuple[int, float]] = field(default_factory=lambda: [
+        (1,  0.50),
+        (2,  0.20),
+        (4,  0.15),
+        (8,  0.10),
+        (16, 0.05),
+    ])
