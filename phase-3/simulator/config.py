@@ -190,7 +190,7 @@ class SimConfig:
     # ------------------------------------------------------------------
     # Discrete hold durations in seconds. Maps directly to A2C output.
     # {0, 15, 30, 60, 120} from the spec table.
-    hold_actions_s: List[int] = field(default_factory=lambda: [0, 15, 30, 60, 120])
+    hold_actions_s: List[int] = field(default_factory=lambda: [0, 15, 30, 60, 120, 180, 300])
 
     # For DDPG (continuous): max hold = 120s.
     hold_max_s: float = 120.0

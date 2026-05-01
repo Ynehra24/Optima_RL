@@ -1,0 +1,296 @@
+{
+  "_meta": {
+    "source": "alibaba_pai_gpu_v2020",
+    "kaggle": "https://www.kaggle.com/datasets/derrickmwiti/cluster-trace-gpu-v2020",
+    "extractor": "extract_alibaba_calibration.py v2",
+    "tables_used": [
+      "pai_task_table.csv",
+      "pai_instance_table.csv",
+      "pai_sensor_table.csv",
+      "pai_machine_spec.csv",
+      "pai_machine_metric.csv"
+    ]
+  },
+  "task_duration_lognormal_mu": 6.522735237591801,
+  "task_duration_lognormal_sigma": 2.1472295689874006,
+  "task_duration_stats": {
+    "duration_s_mean": 5319.82532153988,
+    "duration_s_std": 17649.13715714962,
+    "duration_s_p10": 38.0,
+    "duration_s_p25": 125.0,
+    "duration_s_p50": 621.0,
+    "duration_s_p75": 3613.0,
+    "duration_s_p90": 12483.099999999977,
+    "duration_s_p99": 70331.36999999976,
+    "duration_s_n": 911240
+  },
+  "task_delay_probability": 0.29834445417535904,
+  "task_delay_mean_s": 600.0,
+  "task_delay_stddev_s": 400.0,
+  "delay_detail": {
+    "task_delay_probability": 0.29834445417535904,
+    "task_delay_mean_s": 600.0,
+    "task_delay_stddev_s": 400.0,
+    "failed_task_frac": 0.20360969033741724,
+    "overrun_proxy_frac": 0.3930792180133008,
+    "delay_magnitude_stats": {
+      "delay_magnitude_s_mean": 12650.962195840231,
+      "delay_magnitude_s_std": 28669.70187006996,
+      "delay_magnitude_s_p10": 1016.0,
+      "delay_magnitude_s_p25": 1946.0,
+      "delay_magnitude_s_p50": 4698.0,
+      "delay_magnitude_s_p75": 12129.0,
+      "delay_magnitude_s_p90": 28562.0,
+      "delay_magnitude_s_p99": 129215.19999999984,
+      "delay_magnitude_s_n": 358241
+    }
+  },
+  "task_cpu_demand_mean": 1.0,
+  "task_cpu_demand_stddev": 0.0,
+  "task_mem_demand_mean": 0.9632895544604413,
+  "task_mem_demand_stddev": 0.13190294176717296,
+  "task_gpu_demand_mean": 0.17063823119609292,
+  "task_gpu_demand_stddev": 0.1856469518803369,
+  "task_gpu_request_probability": 0.95,
+  "resource_demand_detail": {
+    "task_cpu_demand_mean": 1.0,
+    "task_cpu_demand_stddev": 0.0,
+    "task_mem_demand_mean": 0.9632895544604413,
+    "task_mem_demand_stddev": 0.13190294176717296,
+    "task_gpu_demand_mean": 0.17063823119609292,
+    "task_gpu_demand_stddev": 0.1856469518803369,
+    "task_gpu_request_probability": 0.95,
+    "cpu_stats": {
+      "plan_cpu_mean": 1.0,
+      "plan_cpu_std": 0.0,
+      "plan_cpu_p10": 1.0,
+      "plan_cpu_p25": 1.0,
+      "plan_cpu_p50": 1.0,
+      "plan_cpu_p75": 1.0,
+      "plan_cpu_p90": 1.0,
+      "plan_cpu_p99": 1.0,
+      "plan_cpu_n": 453
+    },
+    "mem_stats": {
+      "plan_mem_mean": 0.9632895544604413,
+      "plan_mem_std": 0.13190294176717296,
+      "plan_mem_p10": 0.9765625,
+      "plan_mem_p25": 0.9765625,
+      "plan_mem_p50": 0.99609375,
+      "plan_mem_p75": 0.99609375,
+      "plan_mem_p90": 0.99609375,
+      "plan_mem_p99": 1.0,
+      "plan_mem_n": 7432
+    },
+    "gpu_stats": {
+      "plan_gpu_mean": 0.17063823119609292,
+      "plan_gpu_std": 0.1856469518803369,
+      "plan_gpu_p10": 0.025,
+      "plan_gpu_p25": 0.0625,
+      "plan_gpu_p50": 0.125,
+      "plan_gpu_p75": 0.25,
+      "plan_gpu_p90": 0.25,
+      "plan_gpu_p99": 1.0,
+      "plan_gpu_n": 1037085
+    }
+  },
+  "job_size_distribution": [
+    [
+      1,
+      0.8215
+    ],
+    [
+      2,
+      0.1624
+    ],
+    [
+      3,
+      0.0161
+    ],
+    [
+      5,
+      0.0
+    ],
+    [
+      8,
+      0.0
+    ],
+    [
+      12,
+      0.0
+    ],
+    [
+      20,
+      0.0
+    ],
+    [
+      50,
+      0.0
+    ]
+  ],
+  "job_size_stats": {
+    "job_size_mean": 1.1947406965981084,
+    "job_size_std": 0.4353431753233297,
+    "job_size_p10": 1.0,
+    "job_size_p25": 1.0,
+    "job_size_p50": 1.0,
+    "job_size_p75": 1.0,
+    "job_size_p90": 2.0,
+    "job_size_p99": 3.0,
+    "job_size_n": 1055501
+  },
+  "workload_type_distribution": [
+    [
+      "training",
+      0.35
+    ],
+    [
+      "inference",
+      0.2
+    ],
+    [
+      "etl",
+      0.15
+    ],
+    [
+      "pipeline",
+      0.12
+    ],
+    [
+      "serving",
+      0.1
+    ],
+    [
+      "other",
+      0.08
+    ]
+  ],
+  "inst_num_distribution": [
+    [
+      1,
+      0.7643
+    ],
+    [
+      2,
+      0.0455
+    ],
+    [
+      4,
+      0.0455
+    ],
+    [
+      8,
+      0.0632
+    ],
+    [
+      16,
+      0.0815
+    ]
+  ],
+  "scheduling_class_distribution": [
+    [
+      3,
+      0.15,
+      0.0,
+      "production"
+    ],
+    [
+      2,
+      0.25,
+      30.0,
+      "mid_tier"
+    ],
+    [
+      1,
+      0.4,
+      120.0,
+      "batch"
+    ],
+    [
+      0,
+      0.2,
+      300.0,
+      "best_effort"
+    ]
+  ],
+  "gpu_type_distribution": [
+    [
+      "V100",
+      0.0376
+    ],
+    [
+      "A100",
+      0.0
+    ],
+    [
+      "T4",
+      0.1799
+    ],
+    [
+      "P100",
+      0.0577
+    ],
+    [
+      "A10",
+      0.0
+    ],
+    [
+      "other",
+      0.7248
+    ]
+  ],
+  "cpu_utilisation_factor_mean": 0.5230601110469638,
+  "cpu_utilisation_factor_stddev": 0.2960676216533655,
+  "gpu_utilisation_factor_mean": 0.13887334651057218,
+  "gpu_utilisation_factor_stddev": 0.19120052445323008,
+  "mem_utilisation_factor_mean": 0.1,
+  "mem_utilisation_factor_stddev": 0.08018484144468827,
+  "machine_cpu_cores": 96.0,
+  "machine_mem_gb": 512.0,
+  "machine_gpu_count": 2.0,
+  "gpu_machine_fraction": 0.9562467053241961,
+  "machine_spec_detail": {
+    "machine_cpu_cores": 96.0,
+    "machine_mem_gb": 512.0,
+    "machine_gpu_count": 2.0,
+    "gpu_machine_fraction": 0.9562467053241961,
+    "cpu_stats": {
+      "cap_cpu_mean": 82.53874538745387,
+      "cap_cpu_std": 15.80146808283311,
+      "cap_cpu_p10": 64.0,
+      "cap_cpu_p25": 64.0,
+      "cap_cpu_p50": 96.0,
+      "cap_cpu_p75": 96.0,
+      "cap_cpu_p90": 96.0,
+      "cap_cpu_p99": 96.0,
+      "cap_cpu_n": 1897
+    }
+  },
+  "target_cpu_util": 0.296844813266012,
+  "target_gpu_util": 0.4710245357154586,
+  "network_util_mean": 0.3289123015002715,
+  "network_util_stddev": 0.21521621279733902,
+  "dag_topology_distribution": [
+    [
+      "chain",
+      0.3
+    ],
+    [
+      "fan_out",
+      0.2
+    ],
+    [
+      "funnel",
+      0.15
+    ],
+    [
+      "diamond",
+      0.15
+    ],
+    [
+      "random",
+      0.2
+    ]
+  ],
+  "job_arrival_rate_per_s": 0.17709738948777876
+}

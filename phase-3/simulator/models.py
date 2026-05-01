@@ -186,6 +186,14 @@ class TaskState:
     has_intrinsic_delay: bool = False
     intrinsic_delay_s: float  = 0.0
 
+    # FIX 3: field that FIX 9 in simulator._spawn_job writes to.
+    # Stores the maximum intrinsic delay of any parent task, propagated at
+    # spawn time so the upstream_delay feature in the state vector can
+    # reflect the cascade even before the parent has actually started.
+    # state_builder._compute_upstream_delay uses this as a fallback when
+    # no runtime timing information is yet available for the parent tasks.
+    observed_upstream_delay_s: float = 0.0
+
     # HNH decision tracking
     hnh_decided: bool = False
     hnh_action_idx: int = 0          # index into hold_actions_s
@@ -295,15 +303,12 @@ class Job:
                     earliest_start[child],
                     earliest_start[tid] + dur
                 )
-        # Critical path len for each task = remaining duration from that task
         crit = {}
         for tid in task_ids:
-            # longest path from this task to any sink
             crit[tid] = self._longest_path_from(tid)
         self._critical_path_len = crit
 
         # Slack time (latest_start - earliest_start)
-        # Latest start: backward pass
         latest_start = {tid: self.job_deadline_s for tid in task_ids}
         for tid in reversed(topo_order):
             dur = self.tasks[tid].expected_duration_s

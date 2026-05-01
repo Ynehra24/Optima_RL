@@ -57,7 +57,7 @@ def main():
     print("  random   : holds indiscriminately — wastes GPU/CPU resources")
     print("  A2C goal : outperform heuristic (~50% stall reduction, per paper)")
     print("=" * 70)
-    print("\n  State: 88 dims  |  Actions: {0, 15, 30, 60, 120} seconds")
+    print("\n  State: 88 dims  |  Actions: {0, 15, 30, 60, 120, 180, 300} seconds")
 
 
 if __name__ == "__main__":

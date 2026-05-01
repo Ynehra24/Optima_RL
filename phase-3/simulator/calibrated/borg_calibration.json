@@ -1,0 +1,224 @@
+{
+  "_meta": {
+    "source": "alibaba_pai_gpu_v2020",
+    "kaggle": "https://www.kaggle.com/datasets/derrickmwiti/cluster-trace-gpu-v2020",
+    "tables_used": [
+      "pai_task_table.csv",
+      "pai_instance_table.csv",
+      "pai_sensor_table.csv",
+      "pai_machine_spec.csv",
+      "pai_machine_metric.csv"
+    ]
+  },
+  "task_duration_lognormal_mu": 5.7,
+  "task_duration_lognormal_sigma": 1.2,
+  "task_duration_stats": {},
+  "task_delay_probability": 0.12,
+  "task_delay_mean_s": 120.0,
+  "task_delay_stddev_s": 90.0,
+  "delay_detail": {
+    "task_delay_probability": 0.12,
+    "task_delay_mean_s": 120.0,
+    "task_delay_stddev_s": 90.0,
+    "failed_task_frac": 0.12,
+    "overrun_proxy_frac": 0.12,
+    "delay_magnitude_stats": {}
+  },
+  "task_cpu_demand_mean": 0.12,
+  "task_cpu_demand_stddev": 0.15,
+  "task_mem_demand_mean": 0.1,
+  "task_mem_demand_stddev": 0.12,
+  "task_gpu_demand_mean": 0.5,
+  "task_gpu_demand_stddev": 0.3,
+  "task_gpu_request_probability": 0.65,
+  "resource_demand_detail": {
+    "task_cpu_demand_mean": 0.12,
+    "task_cpu_demand_stddev": 0.15,
+    "task_mem_demand_mean": 0.1,
+    "task_mem_demand_stddev": 0.12,
+    "task_gpu_demand_mean": 0.5,
+    "task_gpu_demand_stddev": 0.3,
+    "task_gpu_request_probability": 0.65,
+    "cpu_stats": {},
+    "mem_stats": {},
+    "gpu_stats": {}
+  },
+  "job_size_distribution": [
+    [
+      1,
+      0.25
+    ],
+    [
+      2,
+      0.2
+    ],
+    [
+      3,
+      0.15
+    ],
+    [
+      5,
+      0.15
+    ],
+    [
+      8,
+      0.1
+    ],
+    [
+      12,
+      0.08
+    ],
+    [
+      20,
+      0.05
+    ],
+    [
+      50,
+      0.02
+    ]
+  ],
+  "job_size_stats": {},
+  "workload_type_distribution": [
+    [
+      "training",
+      0.35
+    ],
+    [
+      "inference",
+      0.2
+    ],
+    [
+      "etl",
+      0.15
+    ],
+    [
+      "pipeline",
+      0.12
+    ],
+    [
+      "serving",
+      0.1
+    ],
+    [
+      "other",
+      0.08
+    ]
+  ],
+  "inst_num_distribution": [
+    [
+      1,
+      0.5
+    ],
+    [
+      2,
+      0.2
+    ],
+    [
+      4,
+      0.15
+    ],
+    [
+      8,
+      0.1
+    ],
+    [
+      16,
+      0.05
+    ]
+  ],
+  "scheduling_class_distribution": [
+    [
+      3,
+      0.15,
+      0.0,
+      "production"
+    ],
+    [
+      2,
+      0.25,
+      30.0,
+      "mid_tier"
+    ],
+    [
+      1,
+      0.4,
+      120.0,
+      "batch"
+    ],
+    [
+      0,
+      0.2,
+      300.0,
+      "best_effort"
+    ]
+  ],
+  "gpu_type_distribution": [
+    [
+      "V100",
+      0.3
+    ],
+    [
+      "A100",
+      0.25
+    ],
+    [
+      "T4",
+      0.2
+    ],
+    [
+      "P100",
+      0.15
+    ],
+    [
+      "A10",
+      0.07
+    ],
+    [
+      "other",
+      0.03
+    ]
+  ],
+  "cpu_utilisation_factor_mean": 0.5,
+  "cpu_utilisation_factor_stddev": 0.2,
+  "gpu_utilisation_factor_mean": 0.55,
+  "gpu_utilisation_factor_stddev": 0.25,
+  "mem_utilisation_factor_mean": 0.65,
+  "mem_utilisation_factor_stddev": 0.15,
+  "machine_cpu_cores": 32.0,
+  "machine_mem_gb": 128.0,
+  "machine_gpu_count": 4.0,
+  "gpu_machine_fraction": 0.3,
+  "machine_spec_detail": {
+    "machine_cpu_cores": 32.0,
+    "machine_mem_gb": 128.0,
+    "machine_gpu_count": 4.0,
+    "gpu_machine_fraction": 0.3
+  },
+  "target_cpu_util": 0.6,
+  "target_gpu_util": 0.4,
+  "network_util_mean": 0.45,
+  "network_util_stddev": 0.15,
+  "dag_topology_distribution": [
+    [
+      "chain",
+      0.3
+    ],
+    [
+      "fan_out",
+      0.2
+    ],
+    [
+      "funnel",
+      0.15
+    ],
+    [
+      "diamond",
+      0.15
+    ],
+    [
+      "random",
+      0.2
+    ]
+  ],
+  "job_arrival_rate_per_s": 0.5
+}
