@@ -1,6 +1,6 @@
 # Hold or Not to Hold — Multi-Domain RL Synchronisation
 
-A reinforcement learning system for solving the **Hold-or-Not-Hold (HNH)** decision problem across two logistics domains. The RL agent learns when to delay a departing vehicle to accommodate delayed connecting cargo/passengers, and when the cost of holding outweighs the benefit.
+A reinforcement learning system for solving the **Hold-or-Not-Hold (HNH)** decision problem across aviation, freight logistics, and cloud DAG scheduling. The RL agent learns when to delay a departure/task to accommodate delayed dependencies, and when the cost of holding outweighs the benefit.
 
 Based on the AAMAS 2021 paper *"To Hold or Not to Hold? Using AI to Improve the Efficiency of Airline Networks"*.
 
@@ -13,7 +13,7 @@ In both airline and freight logistics networks, operators face a recurring real-
 - Holding too long → departure delays cascade through the network
 - Leaving too early → missed connections, rebooking costs, SLA violations
 
-This project frames the decision as a sequential RL problem. A local agent observes the state of a single vehicle and its connecting load, then outputs a **hold duration τ ∈ {0, 5, 10, 15, 20, 25, 30} minutes**.
+This project frames the decision as a sequential RL problem. A local agent observes the state of a single vehicle/task and its dependencies, then outputs a discrete hold duration.
 
 ---
 
@@ -50,7 +50,21 @@ RL Proj/
 │   │   ├── delay_tree.py           # Extended Delay Tree with GB (bay-blockage) node
 │   │   ├── reward_calculator.py    # LogisticsRewardCalculator (R_L, R_G + congestion)
 │   │   └── test_tree.py            # 9 unit tests — all passing
-│   └── algoImplementation/         # A2C agent (Phase 3, in progress)
+│   └── algoImplementation/         # A2C/DQN/AC training for logistics
+│
+├── phase-3/                        # Cloud DAG Scheduling Domain
+│   ├── simulator/                  # Calibrated DAG scheduling simulator
+│   │   ├── config.py               # Borg/Alibaba calibrated SimConfig
+│   │   ├── models.py               # Job, Task, Machine, TaskState dataclasses
+│   │   ├── state_builder.py        # 88-dim DAG/resource/cluster state vector
+│   │   ├── reward_engine.py        # Local/global reward with DT attribution
+│   │   ├── simulator.py            # DAGSchedulingSimulator
+│   │   └── run_demo.py             # Baseline policy comparison
+│   ├── rewardEngineering/          # DAG reward engineering
+│   │   ├── delay_tree.py           # DAG Delay Tree with U/RC/F nodes
+│   │   ├── reward_calculator.py    # Convenience attribution helpers
+│   │   └── test_tree.py            # Delay tree smoke tests
+│   └── algoImplementation/         # A2C, DQN, AC for Phase 3
 │
 └── README.md
 ```
@@ -66,7 +80,7 @@ The key insight from the paper is **global credit assignment**: when a downstrea
 A **Delay Tree** traces the causal chain:
 
 ```
-Arrival Delay (A_k)
+Arrival / Completion Delay (A_k)
     └── Departure Delay (D_k)     [weight = D/A]
             ├── Hold Delay (H_k)             [weight = H/D]  ← RL action
             ├── Ground Delay (GD_k)          [weight = GD/D]
@@ -110,6 +124,8 @@ $$
 - `YG` — global transfer success rate
 - `ZG` — delayed inbound queue depth
 
+**Phase 3** — 88 dimensions. Extends the same HNH state idea to cloud DAG scheduling with task identity, scheduling class, workload/GPU type, DAG topology, critical-path features, resource demand, cluster utilisation, and delay-tree variables.
+
 ---
 
 ## Phase-by-Phase Progress
@@ -145,9 +161,26 @@ Adapts the aviation framework to a freight cross-docking hub network.
 
 4 core metrics: schedule OTP, failed transfer rate, avg delivery delay, avg bay utilisation.
 
-### 🔲 Phase 3 — A2C Agent (In Progress)
+### ✅ Phase 3 — Cloud DAG Scheduling (Simulator + Delay Tree + RL)
 
-Advantage Actor-Critic implementation in `phase-2/algoImplementation/`. Will use the `CrossDockSimulator` and `LogisticsRewardCalculator` directly via the Gym API.
+Adapts HNH to Borg/Alibaba-style DAG scheduling.
+
+**Domain mapping:**
+
+| Aviation/Logistics | Phase 3 DAG Scheduling |
+| ------------------ | ---------------------- |
+| Flight / Truck     | Task                   |
+| Tail / route       | Job DAG                |
+| Incoming transfer  | Parent task dependency |
+| Hold departure     | Delay task start       |
+| Missed connection  | Eviction / pipeline stall |
+| Gate/bay pressure  | CPU/GPU/memory resource congestion |
+
+**Key extensions over Phase 2:**
+
+1. **DAG Delay Tree** — Adds `U` (upstream parent), `RC` (resource congestion), and `F` (failed/evicted parent) nodes while preserving the core `A/D/H/GD/T` attribution rules.
+2. **Reward integration** — `phase-3/simulator/reward_engine.py` now routes post-episode global attribution through the dedicated DAG Delay Tree when available.
+3. **Algorithm implementation** — `phase-3/algoImplementation/` includes A2C, DQN, and online AC agents plus a training/evaluation driver for the 88-dim simulator state.
 
 ---
 
@@ -192,6 +225,24 @@ Expected output:
 ============================================================
   ALL 9 TESTS PASSED ✓
 ============================================================
+```
+
+### Phase 3 — DAG Simulator Demo
+
+```bash
+python3 phase-3/simulator/run_demo.py
+```
+
+### Phase 3 — Delay Tree Tests
+
+```bash
+python3 phase-3/rewardEngineering/test_tree.py
+```
+
+### Phase 3 — RL Training Smoke Run
+
+```bash
+python3 phase-3/algoImplementation/train.py --algo a2c --episodes 1 --no-plots --duration-s 300 --max-decisions 20
 ```
 
 ---
