@@ -18,6 +18,7 @@ import os
 import pickle
 import sys
 import time
+from datetime import datetime
 from typing import Callable, Dict, List, Tuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -425,9 +426,11 @@ def print_table(results: Dict) -> None:
         )
 
 
-def save_results(results: Dict, train_results: Dict, cfg: Dict) -> None:
+def save_results(results: Dict, train_results: Dict, cfg: Dict, run_name: str) -> None:
     summary_path = os.path.join(RESULTS_DIR, "summary.json")
+    run_summary_path = os.path.join(RESULTS_DIR, f"{run_name}_summary.json")
     payload = {
+        "run_name": run_name,
         "config": cfg,
         "evaluation": {
             name: {
@@ -447,7 +450,10 @@ def save_results(results: Dict, train_results: Dict, cfg: Dict) -> None:
     }
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
+    with open(run_summary_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
     print(f"  Summary saved to {summary_path}")
+    print(f"  Run summary saved to {run_summary_path}")
 
 
 def main() -> None:
@@ -461,6 +467,8 @@ def main() -> None:
     parser.add_argument("--duration-s", type=float, default=None)
     parser.add_argument("--max-decisions", type=int, default=None)
     parser.add_argument("--log-every", type=int, default=None)
+    parser.add_argument("--run-name", default=None,
+                        help="Stable name used for run-specific summary files.")
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args()
 
@@ -479,11 +487,16 @@ def main() -> None:
         cfg["log_every"] = args.log_every
 
     algos = ALL_ALGOS if args.algo == "all" else [args.algo]
+    run_name = args.run_name or (
+        f"phase3_{args.preset}_{args.algo}_"
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
 
     print("\n" + "=" * 68)
     print("  Phase 3 DAG Scheduling — Hold-or-Not-Hold RL")
     print(f"  Algorithms       : {algos}")
     print(f"  Preset           : {args.preset}")
+    print(f"  Run name         : {run_name}")
     print(f"  State dim/actions: {STATE_DIM}/{ACTION_DIM}")
     print(f"  Train/Test eps   : {cfg['n_train_episodes']}/{cfg['n_test_episodes']}")
     print(f"  Episode cap      : {cfg['episode_duration_s']}s, {cfg['max_hnh_decisions']} HNH")
@@ -498,7 +511,7 @@ def main() -> None:
         train_results[algo] = train(agent, env, cfg["n_train_episodes"], algo, cfg)
         agents[algo] = agent
         try:
-            with open(os.path.join(RESULTS_DIR, f"{algo}_agent.pkl"), "wb") as f:
+            with open(os.path.join(RESULTS_DIR, f"{run_name}_{algo}_agent.pkl"), "wb") as f:
                 pickle.dump(agent, f)
         except Exception as exc:
             print(f"  Warning: could not pickle {algo}: {exc}")
@@ -519,7 +532,7 @@ def main() -> None:
         results[algo] = evaluate_agent(agent, cfg, cfg["n_test_episodes"], algo)
 
     print_table(results)
-    save_results(results, train_results, cfg)
+    save_results(results, train_results, cfg, run_name)
 
     if not args.no_plots:
         plot_training_curves(
