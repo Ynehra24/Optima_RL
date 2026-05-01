@@ -63,6 +63,37 @@ DEFAULT_CONFIG = {
     "max_hnh_decisions": 500,
 }
 
+TRAINING_PRESETS = {
+    "smoke": {
+        "n_train_episodes": 2,
+        "n_test_episodes": 1,
+        "episode_duration_s": 300.0,
+        "max_hnh_decisions": 30,
+        "log_every": 50,
+    },
+    "standard": {
+        "n_train_episodes": 30,
+        "n_test_episodes": 8,
+        "episode_duration_s": 3_600.0,
+        "max_hnh_decisions": 750,
+        "log_every": 250,
+    },
+    "long": {
+        "n_train_episodes": 100,
+        "n_test_episodes": 20,
+        "episode_duration_s": 7_200.0,
+        "max_hnh_decisions": 1_500,
+        "log_every": 500,
+    },
+    "paper": {
+        "n_train_episodes": 200,
+        "n_test_episodes": 30,
+        "episode_duration_s": 24 * 3_600.0,
+        "max_hnh_decisions": 5_000,
+        "log_every": 1_000,
+    },
+}
+
 ALGO_COLORS = {
     "a2c": "#1f77b4",
     "dqn": "#ff7f0e",
@@ -422,26 +453,37 @@ def save_results(results: Dict, train_results: Dict, cfg: Dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase 3 DAG HNH RL")
     parser.add_argument("--algo", default="all", choices=["all"] + ALL_ALGOS)
+    parser.add_argument("--preset", default="standard",
+                        choices=sorted(TRAINING_PRESETS),
+                        help="Training budget preset. Explicit flags override it.")
     parser.add_argument("--episodes", type=int, default=None)
+    parser.add_argument("--test-episodes", type=int, default=None)
     parser.add_argument("--duration-s", type=float, default=None)
     parser.add_argument("--max-decisions", type=int, default=None)
+    parser.add_argument("--log-every", type=int, default=None)
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args()
 
     cfg = DEFAULT_CONFIG.copy()
+    cfg.update(TRAINING_PRESETS[args.preset])
     if args.episodes is not None:
         cfg["n_train_episodes"] = args.episodes
         cfg["n_test_episodes"] = max(1, args.episodes // 2)
+    if args.test_episodes is not None:
+        cfg["n_test_episodes"] = args.test_episodes
     if args.duration_s is not None:
         cfg["episode_duration_s"] = args.duration_s
     if args.max_decisions is not None:
         cfg["max_hnh_decisions"] = args.max_decisions
+    if args.log_every is not None:
+        cfg["log_every"] = args.log_every
 
     algos = ALL_ALGOS if args.algo == "all" else [args.algo]
 
     print("\n" + "=" * 68)
     print("  Phase 3 DAG Scheduling — Hold-or-Not-Hold RL")
     print(f"  Algorithms       : {algos}")
+    print(f"  Preset           : {args.preset}")
     print(f"  State dim/actions: {STATE_DIM}/{ACTION_DIM}")
     print(f"  Train/Test eps   : {cfg['n_train_episodes']}/{cfg['n_test_episodes']}")
     print(f"  Episode cap      : {cfg['episode_duration_s']}s, {cfg['max_hnh_decisions']} HNH")
