@@ -1,0 +1,106 @@
+{
+  "config": {
+    "n_train_episodes": 8,
+    "n_test_episodes": 4,
+    "lr": 0.0001,
+    "gamma": 0.8,
+    "batch_size": 32,
+    "alpha": 0.75,
+    "beta": 0.75,
+    "log_every": 100,
+    "seed": 42,
+    "episode_duration_s": 1200.0,
+    "max_hnh_decisions": 160
+  },
+  "evaluation": {
+    "no_hold": {
+      "avg_departure_delay_s": 0.0,
+      "avg_reward": 0.553125,
+      "completed_pct": 0.0,
+      "episode_steps": 88.5,
+      "evicted_pct": 35.225,
+      "failed_pct": 12.6325,
+      "hold_rate_pct": 0.0,
+      "holds_pct": 0.0,
+      "pipeline_stalls": 88.5,
+      "pipelines_saved": 0.0,
+      "steps": 88.5,
+      "total_jobs": 578.25,
+      "total_reward": 49.5,
+      "total_tasks": 693.5
+    },
+    "heuristic": {
+      "avg_departure_delay_s": 0.0,
+      "avg_reward": 0.5480422124373792,
+      "completed_pct": 0.965,
+      "episode_steps": 9.0,
+      "evicted_pct": 0.0,
+      "failed_pct": 0.0,
+      "hold_rate_pct": 100.0,
+      "holds_pct": 100.0,
+      "pipeline_stalls": 0.0,
+      "pipelines_saved": 0.0,
+      "steps": 9.0,
+      "total_jobs": 968.0,
+      "total_reward": 4.9628000000000005,
+      "total_tasks": 1156.25
+    },
+    "gpu_guard": {
+      "avg_departure_delay_s": 0.0,
+      "avg_reward": 0.5249510441495743,
+      "completed_pct": 0.965,
+      "episode_steps": 9.0,
+      "evicted_pct": 0.0,
+      "failed_pct": 0.0,
+      "hold_rate_pct": 100.0,
+      "holds_pct": 100.0,
+      "pipeline_stalls": 0.0,
+      "pipelines_saved": 0.0,
+      "steps": 9.0,
+      "total_jobs": 968.0,
+      "total_reward": 4.762375,
+      "total_tasks": 1156.25
+    },
+    "a2c": {
+      "avg_departure_delay_s": 0.0,
+      "avg_reward": 0.5707026384273575,
+      "completed_pct": 3.1725000000000003,
+      "episode_steps": 17.25,
+      "evicted_pct": 0.0,
+      "failed_pct": 0.0,
+      "hold_rate_pct": 100.0,
+      "holds_pct": 100.0,
+      "pipeline_stalls": 0.0,
+      "pipelines_saved": 0.0,
+      "steps": 17.25,
+      "total_jobs": 976.5,
+      "total_reward": 9.811399999999999,
+      "total_tasks": 1159.75
+    }
+  },
+  "training": {
+    "a2c": {
+      "num_rewards": 351,
+      "episode_rewards": [
+        0.5071487426757812,
+        0.5605732798576355,
+        0.5321072936058044,
+        0.554328441619873,
+        0.5405478477478027,
+        0.5368554592132568,
+        0.5534573793411255,
+        0.49173271656036377
+      ],
+      "episode_lengths": [
+        8,
+        69,
+        1,
+        72,
+        81,
+        48,
+        14,
+        58
+      ]
+    }
+  }
+}
