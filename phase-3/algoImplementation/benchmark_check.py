@@ -123,11 +123,19 @@ def main() -> None:
     parser.add_argument("--baseline", action="append",
                         default=["no_hold", "heuristic", "gpu_guard"])
     parser.add_argument("--tolerance", type=float, default=1e-6)
+    parser.add_argument("--output", default=None,
+                        help="Optional path to write the benchmark report.")
     args = parser.parse_args()
 
     evaluation = load_summary(args.summary)
     report = format_report(evaluation, args.agent, args.baseline, args.tolerance)
     print(report)
+    if args.output:
+        output_dir = os.path.dirname(os.path.abspath(args.output))
+        os.makedirs(output_dir, exist_ok=True)
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(report)
+            f.write("\n")
     if report.rstrip().endswith("FAIL"):
         raise SystemExit(1)
 

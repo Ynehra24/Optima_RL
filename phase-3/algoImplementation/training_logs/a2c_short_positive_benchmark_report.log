@@ -1,0 +1,27 @@
+==============================================================================
+PHASE 3 BENCHMARK CHECK: A2C
+==============================================================================
+Agent metrics: completed=0.96% | stalls=0.00 | evicted=0.00% | failed=0.00% | avg_reward=0.5765
+------------------------------------------------------------------------------
+PASS vs no_hold: 5/5 metrics non-worse (tolerance=1e-06)
+  OK  completed_pct    direction=higher agent=   0.9600 baseline=   0.0000 delta=   0.9600
+  OK  pipeline_stalls  direction=lower  agent=   0.0000 baseline=  30.0000 delta= -30.0000
+  OK  evicted_pct      direction=lower  agent=   0.0000 baseline=   2.8900 delta=  -2.8900
+  OK  failed_pct       direction=lower  agent=   0.0000 baseline=   1.1600 delta=  -1.1600
+  OK  avg_reward       direction=higher agent=   0.5765 baseline=   0.5700 delta=   0.0065
+------------------------------------------------------------------------------
+PASS vs heuristic: 5/5 metrics non-worse (tolerance=1e-06)
+  OK  completed_pct    direction=higher agent=   0.9600 baseline=   0.6600 delta=   0.3000
+  OK  pipeline_stalls  direction=lower  agent=   0.0000 baseline=   0.0000 delta=   0.0000
+  OK  evicted_pct      direction=lower  agent=   0.0000 baseline=   0.0000 delta=   0.0000
+  OK  failed_pct       direction=lower  agent=   0.0000 baseline=   0.0000 delta=   0.0000
+  OK  avg_reward       direction=higher agent=   0.5765 baseline=   0.5625 delta=   0.0140
+------------------------------------------------------------------------------
+PASS vs gpu_guard: 5/5 metrics non-worse (tolerance=1e-06)
+  OK  completed_pct    direction=higher agent=   0.9600 baseline=   0.6600 delta=   0.3000
+  OK  pipeline_stalls  direction=lower  agent=   0.0000 baseline=   0.0000 delta=   0.0000
+  OK  evicted_pct      direction=lower  agent=   0.0000 baseline=   0.0000 delta=   0.0000
+  OK  failed_pct       direction=lower  agent=   0.0000 baseline=   0.0000 delta=   0.0000
+  OK  avg_reward       direction=higher agent=   0.5765 baseline=   0.5492 delta=   0.0273
+------------------------------------------------------------------------------
+OVERALL: PASS
