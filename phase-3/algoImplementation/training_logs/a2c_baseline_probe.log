@@ -1,0 +1,49 @@
+
+====================================================================
+  Phase 3 DAG Scheduling — Hold-or-Not-Hold RL
+  Algorithms       : ['a2c']
+  State dim/actions: 88/7
+  Train/Test eps   : 6/3
+  Episode cap      : 900.0s, 120 HNH
+  alpha=0.75 beta=0.75 lr=0.0001 gamma=0.8
+====================================================================
+
+====================================================================
+  Training A2C on Phase 3 DAG simulator (6 episodes)
+====================================================================
+  Episode   1 done | Steps:    9 | MeanR: 0.4878 | Hold%:  66.7 | Stalls:     3 | Reward:    4.390
+  Episode   2 done | Steps:   10 | MeanR: 0.5108 | Hold%:  60.0 | Stalls:     4 | Reward:    5.107
+  Episode   3 done | Steps:    1 | MeanR: 0.5283 | Hold%: 100.0 | Stalls:     0 | Reward:    0.528
+  Episode   4 done | Steps:   43 | MeanR: 0.5358 | Hold%:  69.8 | Stalls:    13 | Reward:   23.041
+  Episode   5 done | Steps:    6 | MeanR: 0.5409 | Hold%: 100.0 | Stalls:     0 | Reward:    3.245
+  Ep   6 | Step    100 | AvgR: 0.5305 | Loss: 1.9191 | Hold%:  71.0 | Evict%:   6.6 | Done%:  16.1 | 0s
+  Episode   6 done | Steps:   50 | MeanR: 0.5387 | Hold%:  78.0 | Stalls:    11 | Reward:   26.937
+
+====================================================================
+  Evaluating baselines
+====================================================================
+  Evaluating baseline: No Hold...
+    No Hold    | Done%:   0.0 | Evict%:  52.9 | Hold%:   0.0 | Stalls:    90.0 | Reward:   49.950
+  Evaluating baseline: Heuristic...
+    Heuristic  | Done%:   1.2 | Evict%:   0.0 | Hold%: 100.0 | Stalls:     0.0 | Reward:    5.758
+  Evaluating baseline: GPU Guard...
+    GPU Guard  | Done%:   1.2 | Evict%:   0.0 | Hold%: 100.0 | Stalls:     0.0 | Reward:    5.535
+
+====================================================================
+  Evaluating RL agents
+====================================================================
+  Evaluating A2C (3 episodes)...
+    A2C        | Done%:   7.2 | Evict%:   1.1 | Hold%:  76.6 | Stalls:     7.3 | Reward:   17.263
+
+============================================================================================
+  RESULTS TABLE — Phase 3 DAG Scheduling HNH
+============================================================================================
+  Method          Done%   Failed%   Evict%    Hold%   Stalls      AvgR     Reward
+  ----------------------------------------------------------------------------------
+  No Hold          0.0     18.7    52.9     0.0     90.0    0.5588     49.950
+  Heuristic        1.2      0.0     0.0   100.0      0.0    0.5589      5.758
+  GPU Guard        1.2      0.0     0.0   100.0      0.0    0.5370      5.535
+  A2C              7.2      0.7     1.1    76.6      7.3    0.5541     17.263
+  Summary saved to /Users/raghav_sarna/Desktop/Drive/Plaksha/Semester 6/RL/Optima_RL/phase-3/algoImplementation/results/summary.json
+
+  All done. Results are in phase-3/algoImplementation/results/
