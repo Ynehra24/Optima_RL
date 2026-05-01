@@ -217,15 +217,13 @@ class DAGSchedulingSimulator:
         self.current_time_s = decision_time + hold_s
         ts.actual_start_s = self.current_time_s
         ts.departure_delay_s = max(0.0, self.current_time_s - ts.scheduled_start_s)
+        self.metrics.total_departure_delay_s += ts.departure_delay_s
+        self.metrics.started_tasks += 1
         ts.status = TaskStatus.RUNNING
 
         if hold_s == 0:
-            # No-hold: preempt immediately
-            ts.status = TaskStatus.EVICTED
-            ts.restart_count += 1
             self.metrics.no_hold_decisions += 1
-            self.metrics.total_pipeline_stalls += 1
-            self.metrics.evicted_tasks += 1
+            self._assign_machine(task_id, ts)
         else:
             self.metrics.hold_decisions += 1
             self._assign_machine(task_id, ts)
@@ -248,6 +246,7 @@ class DAGSchedulingSimulator:
         if ts.status == TaskStatus.RUNNING:
             self._simulate_task_completion(task_id, ts, job)
         elif ts.status == TaskStatus.EVICTED:
+            self.metrics.total_pipeline_stalls += 1
             self._requeue_evicted_task(task_id, ts, job)
 
         return self._advance_to_next_hnh(reward=reward)
@@ -320,17 +319,16 @@ class DAGSchedulingSimulator:
                 return state, reward, False, info
 
             # No queued events — advance to next job arrival
-            self._process_arrivals_up_to(self._next_arrival_s)
-            self.current_time_s = self._next_arrival_s
-            self._next_arrival_s += self._sample_inter_arrival()
+            next_arrival = self._next_arrival_s
+            self._process_arrivals_up_to(next_arrival)
             if not self._hnh_queue:
-                self.current_time_s = min(self._next_arrival_s,
-                                          self.cfg.episode_duration_s)
+                self.current_time_s = min(next_arrival, self.cfg.episode_duration_s)
 
     def _process_arrivals_up_to(self, time_limit_s: float):
         while self._next_arrival_s <= time_limit_s:
             self._spawn_job(self._next_arrival_s)
             self._next_arrival_s += self._sample_inter_arrival()
+        self._drain_ready_non_hnh_tasks(time_limit_s)
 
     def _spawn_job(self, arrival_s: float):
         job_id = f"J{self._job_counter:06d}"
@@ -365,6 +363,7 @@ class DAGSchedulingSimulator:
         # Keep queue sorted by event time (insertion sort would be O(n) but
         # this is called infrequently relative to step())
         self._hnh_queue = deque(sorted(self._hnh_queue, key=lambda x: x[0]))
+        self._drain_ready_non_hnh_tasks(arrival_s)
 
     def _sample_inter_arrival(self) -> float:
         rate = self.cfg.job_arrival_rate_per_s
@@ -417,9 +416,11 @@ class DAGSchedulingSimulator:
                                  - (ts.actual_start_s + ts.task.expected_duration_s))
         ts.status = TaskStatus.DONE
         self.metrics.completed_tasks += 1
+        self.metrics.total_arrival_delay_s += ts.arrival_delay_s
 
         self._release_machine(ts)
         self._unlock_children(task_id, job)
+        self._drain_ready_non_hnh_tasks(self.current_time_s)
 
         self._recent_cl.append(
             1.0 if ts.arrival_delay_s == 0
@@ -449,9 +450,8 @@ class DAGSchedulingSimulator:
         ts.scheduled_start_s = requeue_time
         ts.status = TaskStatus.READY
 
-        if ts.has_intrinsic_delay:
-            self._hnh_queue.append((requeue_time, task_id, job.job_id))
-            self._hnh_queue = deque(sorted(self._hnh_queue, key=lambda x: x[0]))
+        self._hnh_queue.append((requeue_time, task_id, job.job_id))
+        self._hnh_queue = deque(sorted(self._hnh_queue, key=lambda x: x[0]))
 
     def _unlock_children(self, task_id: str, job: Job,
                          parent_failed: bool = False):
@@ -494,6 +494,53 @@ class DAGSchedulingSimulator:
             )
             if all_done:
                 cts.status = TaskStatus.READY
+                if cts.has_intrinsic_delay and not cts.hnh_decided:
+                    event_time = max(
+                        self.current_time_s,
+                        cts.scheduled_start_s - cts.intrinsic_delay_s * 0.3,
+                    )
+                    self._hnh_queue.append((event_time, child_id, job.job_id))
+                    self._hnh_queue = deque(sorted(self._hnh_queue, key=lambda x: x[0]))
+
+    def _drain_ready_non_hnh_tasks(self, time_limit_s: float):
+        """Run ready tasks that do not need an HNH decision.
+
+        The simulator completes tasks immediately once they are assigned, so
+        this helper gives ordinary DAG tasks the same execution path as tasks
+        that pass through step(). Delayed tasks still wait for their HNH event.
+        """
+        progressed = True
+        while progressed:
+            progressed = False
+            ready = sorted(
+                (
+                    (ts.scheduled_start_s, job_id, task_id, ts)
+                    for job_id, job in self.jobs.items()
+                    for task_id in job.tasks
+                    if (ts := self.task_states.get(task_id)) is not None
+                    and ts.status == TaskStatus.READY
+                    and not (ts.has_intrinsic_delay and not ts.hnh_decided)
+                    and ts.scheduled_start_s <= time_limit_s
+                ),
+                key=lambda item: item[0],
+            )
+            for _, job_id, task_id, ts in ready:
+                job = self.jobs.get(job_id)
+                if job is None or ts.status != TaskStatus.READY:
+                    continue
+                self.current_time_s = max(self.current_time_s, ts.scheduled_start_s)
+                ts.actual_start_s = self.current_time_s
+                ts.departure_delay_s = max(0.0, self.current_time_s - ts.scheduled_start_s)
+                self.metrics.total_departure_delay_s += ts.departure_delay_s
+                self.metrics.started_tasks += 1
+                ts.status = TaskStatus.RUNNING
+                self._assign_machine(task_id, ts)
+                if ts.status == TaskStatus.RUNNING:
+                    self._simulate_task_completion(task_id, ts, job)
+                elif ts.status == TaskStatus.EVICTED:
+                    self.metrics.total_pipeline_stalls += 1
+                    self._requeue_evicted_task(task_id, ts, job)
+                progressed = True
 
     # ------------------------------------------------------------------
     # Internal: cluster snapshot

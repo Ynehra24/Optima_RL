@@ -415,6 +415,7 @@ class MetricsTracker:
     completed_tasks: int = 0
     failed_tasks: int = 0
     evicted_tasks: int = 0
+    started_tasks: int = 0
 
     # HNH decisions
     hold_decisions: int = 0
@@ -449,7 +450,9 @@ class MetricsTracker:
             "pipelines_saved":     self.pipelines_saved_by_hold,
             "pipeline_stalls":     self.total_pipeline_stalls,
             "avg_departure_delay_s": round(
-                self.total_departure_delay_s / max(self.hold_decisions, 1), 2),
+                self.total_departure_delay_s / max(self.started_tasks, 1), 2),
+            "avg_arrival_delay_s": round(
+                self.total_arrival_delay_s / max(self.completed_tasks, 1), 2),
             "total_reward":        round(self.total_reward, 4),
             "episode_steps":       self.episode_steps,
         }

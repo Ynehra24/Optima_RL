@@ -38,10 +38,17 @@ def compute_reward(
 
     Returns a scalar reward in roughly [-1, 1].
     """
+    if task_state.status == TaskStatus.FAILED:
+        return -1.0
+    if task_state.status == TaskStatus.EVICTED:
+        return -0.8
+
     r_local = _compute_local_reward(task_id, job, task_state, task_states, cfg)
     r_global = _compute_global_reward(task_id, task_state, cluster, cfg)
 
     r_total = cfg.beta * r_local + (1.0 - cfg.beta) * r_global
+    if task_state.restart_count > 0:
+        r_total -= min(0.3, 0.1 * task_state.restart_count)
     return float(r_total)
 
 
@@ -80,8 +87,9 @@ def _measure_pipeline_utility(
     """
     children = job.get_children(task_id)
     if not children:
-        # No downstream — treat as neutral
-        return 0.6
+        # No downstream dependency to save; keep this neutral so leaf tasks
+        # cannot dominate reward through positive pipeline credit.
+        return 0.5
 
     N = len(children)
     total = 0.0
