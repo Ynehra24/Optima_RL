@@ -68,7 +68,7 @@ class A2CAgent:
         lr:           float = 0.0001,
         gamma:        float = 0.8,
         batch_size:   int   = 32,
-        entropy_coef: float = 0.05,
+        entropy_coef: float = 0.02,
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):
@@ -110,39 +110,11 @@ class A2CAgent:
         return action, float(value)
 
     def greedy_action(self, state: np.ndarray) -> int:
-        """Greedy action used during evaluation.
-
-        Phase 3 state vectors already contain the CL(τ) and OL(τ) candidate
-        utilities used by the simulator's context engine.  If the learned
-        policy is not clearly confident, fall back to the best CL/OL action.
-        That makes evaluation robust early in training and prevents avoidable
-        no-hold stalls from a nearly-uniform policy.
-        """
+        """Greedy learned action used during evaluation."""
         probs, _ = self.network.forward(state)
         probs     = np.clip(probs, 1e-8, 1.0)
         probs    /= probs.sum()
-        learned_best = int(np.argmax(probs))
-        safe_best = self._state_utility_action(state)
-        if learned_best == 0 and probs[0] >= 0.85 and float(state[14]) <= 0.0:
-            return 0
-        if learned_best > 0 and probs[learned_best] >= 0.34:
-            return learned_best
-        return safe_best
-
-    def _state_utility_action(self, state: np.ndarray) -> int:
-        """Choose argmax over CL/OL candidate utilities embedded in state."""
-        if state.shape[0] < 15:
-            return 0
-        cl = np.nan_to_num(state[0:7], nan=0.0, posinf=1.0, neginf=0.0)
-        ol = np.nan_to_num(state[7:14], nan=0.0, posinf=1.0, neginf=0.0)
-        utility = 0.75 * cl + 0.25 * ol
-        positive_best = int(1 + np.argmax(utility[1:]))
-        if utility[positive_best] <= 0.0:
-            return 0
-        for action in range(1, self.action_dim):
-            if utility[action] >= utility[positive_best] - 0.03:
-                return action
-        return positive_best
+        return int(np.argmax(probs))
 
     def store(self, state, action, reward, value, done):
         """Store one transition in the rollout buffer."""

@@ -27,7 +27,7 @@ class DQNAgent:
         buffer_size:  int   = 10000,
         eps_start:    float = 1.0,
         eps_end:      float = 0.05,
-        eps_decay:    int   = 15000,   # 10-hub: ~200 steps/ep → needs more exploration
+        eps_decay:    int   = 4000,
         tau:          float = 0.01,    # soft target update
         seed:         int   = 42,
     ):

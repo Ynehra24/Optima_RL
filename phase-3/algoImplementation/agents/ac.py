@@ -25,7 +25,7 @@ class ACAgent:
         lr:           float = 0.0001,
         gamma:        float = 0.8,
         batch_size:   int   = 32,    # kept for API compatibility; AC uses 1
-        entropy_coef: float = 0.05,
+        entropy_coef: float = 0.02,
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):

@@ -53,8 +53,8 @@ ALL_ALGOS = ["a2c", "dqn", "ac", "ddpg"]
 DEFAULT_CONFIG = {
     "n_train_episodes": 8,
     "n_test_episodes": 3,
-    "lr": 0.0001,
-    "gamma": 0.8,
+    "lr": 0.0003,
+    "gamma": 0.9,
     "batch_size": 32,
     "alpha": 0.75,
     "beta": 0.75,

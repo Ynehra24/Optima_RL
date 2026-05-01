@@ -47,9 +47,56 @@ def compute_reward(
     r_global = _compute_global_reward(task_id, task_state, cluster, cfg)
 
     r_total = cfg.beta * r_local + (1.0 - cfg.beta) * r_global
+    r_total += _compute_action_shaping(task_id, job, task_state, cluster, cfg)
     if task_state.restart_count > 0:
         r_total -= min(0.3, 0.1 * task_state.restart_count)
-    return float(r_total)
+    return float(max(-1.0, min(1.0, r_total)))
+
+
+def _compute_action_shaping(
+    task_id: str,
+    job: Job,
+    task_state: TaskState,
+    cluster: ClusterSnapshot,
+    cfg: SimConfig,
+) -> float:
+    """Dense action-quality signal for learning.
+
+    The base reward is intentionally paper-shaped, but after switching to real
+    completion events it is too weakly tied to the immediate HNH choice. This
+    shaping rewards holds that cover real intrinsic delay and penalizes excess
+    hold time, residual missed delay, and holding under resource pressure.
+    """
+    hold_s = max(0.0, task_state.hold_duration_s)
+    intrinsic_s = max(0.0, task_state.intrinsic_delay_s)
+    useful_hold_s = min(hold_s, intrinsic_s)
+    wasted_hold_s = max(0.0, hold_s - intrinsic_s)
+    residual_s = max(0.0, intrinsic_s - hold_s)
+
+    # Downstream tasks are where HNH has real pipeline value. Leaf tasks still
+    # get a tiny benefit for absorbing their own delay, but not enough to make
+    # blanket holding attractive.
+    downstream_weight = 1.0 if job.get_children(task_id) else 0.35
+    priority_weight = 0.5 + 0.5 * (task_state.task.priority / 11.0)
+    resource_pressure = max(cluster.cpu_util, cluster.gpu_util)
+    resource_cost = task_state.task.resource_cost_score
+
+    benefit = 0.42 * downstream_weight * priority_weight * (
+        useful_hold_s / max(cfg.delta_f, 1.0)
+    )
+    residual_penalty = 0.34 * downstream_weight * priority_weight * (
+        residual_s / max(cfg.delta_c, 1.0)
+    )
+    waste_penalty = 0.30 * (wasted_hold_s / max(cfg.delta_f, 1.0))
+    occupancy_penalty = 0.18 * resource_cost * resource_pressure * (
+        hold_s / max(cfg.hold_max_s, 1.0)
+    )
+
+    # No-hold should not be artificially worse when there is little actionable
+    # delay. This small bonus helps agents learn "do nothing" as a valid action.
+    no_hold_bonus = 0.04 if hold_s == 0.0 and intrinsic_s <= 5.0 else 0.0
+
+    return benefit + no_hold_bonus - residual_penalty - waste_penalty - occupancy_penalty
 
 
 # ===========================================================================
@@ -133,7 +180,9 @@ def _measure_operator_utility(task_state: TaskState, cfg: SimConfig) -> float:
         return 0.0
 
     d_k = task_state.departure_delay_s
-    ol = 1.0 - d_k / max(cfg.delta_f, 1.0)
+    residual_delay = max(0.0, task_state.intrinsic_delay_s - task_state.hold_duration_s)
+    wasted_hold = max(0.0, task_state.hold_duration_s - task_state.intrinsic_delay_s)
+    ol = 1.0 - (d_k + 0.5 * residual_delay + 0.75 * wasted_hold) / max(cfg.delta_f, 1.0)
     return max(0.0, min(1.0, ol))
 
 
