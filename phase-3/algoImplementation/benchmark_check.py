@@ -68,7 +68,7 @@ def score_against_baseline(agent: Dict, baseline: Dict,
     return wins, total, details
 
 
-def format_report(evaluation: Dict, agent_name: str,
+def format_agent_report(evaluation: Dict, agent_name: str,
                   baselines: Iterable[str], tolerance: float) -> str:
     if agent_name not in evaluation:
         raise ValueError(f"Agent {agent_name!r} not found in summary")
@@ -116,10 +116,21 @@ def format_report(evaluation: Dict, agent_name: str,
     return "\n".join(lines)
 
 
+def format_report(evaluation: Dict, agent_names: Iterable[str],
+                  baselines: Iterable[str], tolerance: float) -> str:
+    reports = []
+    for agent_name in agent_names:
+        reports.append(format_agent_report(evaluation, agent_name, baselines, tolerance))
+    return "\n\n".join(reports)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check Phase 3 RL summary against baselines")
     parser.add_argument("--summary", default=DEFAULT_SUMMARY)
-    parser.add_argument("--agent", default="a2c")
+    parser.add_argument("--agent", action="append", default=None,
+                        help="Agent to check. Repeat or use --all-agents.")
+    parser.add_argument("--all-agents", action="store_true",
+                        help="Check every RL agent present in the summary.")
     parser.add_argument("--baseline", action="append",
                         default=["no_hold", "heuristic", "gpu_guard"])
     parser.add_argument("--tolerance", type=float, default=1e-6)
@@ -128,7 +139,14 @@ def main() -> None:
     args = parser.parse_args()
 
     evaluation = load_summary(args.summary)
-    report = format_report(evaluation, args.agent, args.baseline, args.tolerance)
+    if args.all_agents:
+        agents = [
+            name for name in ("a2c", "dqn", "ac", "ddpg")
+            if name in evaluation
+        ]
+    else:
+        agents = args.agent or ["a2c"]
+    report = format_report(evaluation, agents, args.baseline, args.tolerance)
     print(report)
     if args.output:
         output_dir = os.path.dirname(os.path.abspath(args.output))
