@@ -72,11 +72,15 @@ class Linear:
         if self._x.ndim == 1:
             self.dW = finite_array(np.outer(self._x, grad_out), lo=-10.0, hi=10.0)
             self.db = finite_array(grad_out, lo=-10.0, hi=10.0)
-            return finite_array(grad_out @ self.W.T, lo=-10.0, hi=10.0)
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                grad_in = grad_out @ self.W.T
+            return finite_array(grad_in, lo=-10.0, hi=10.0)
         else:
             self.dW = finite_array(self._x.T @ grad_out, lo=-10.0, hi=10.0)
             self.db = finite_array(grad_out.sum(axis=0), lo=-10.0, hi=10.0)
-            return finite_array(grad_out @ self.W.T, lo=-10.0, hi=10.0)
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                grad_in = grad_out @ self.W.T
+            return finite_array(grad_in, lo=-10.0, hi=10.0)
 
     @property
     def params(self):
