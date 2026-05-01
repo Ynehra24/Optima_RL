@@ -1,8 +1,8 @@
 """
 train.py — Phase 3 DAG Scheduling Hold-or-Not-Hold RL Training.
 
-Trains and evaluates A2C, DQN, and AC on DAGSchedulingSimulator.  The shape is
-intentionally close to phase-2/algoImplementation/train.py so phase comparisons
+Trains and evaluates A2C, DQN, AC, and DDPG on DAGSchedulingSimulator.  The
+shape is intentionally close to phase-1/2 training scripts so phase comparisons
 remain easy:
 
     python phase-3/algoImplementation/train.py
@@ -39,6 +39,7 @@ from simulator.simulator import DAGSchedulingSimulator
 from agents.a2c import A2CAgent
 from agents.dqn import DQNAgent
 from agents.ac import ACAgent
+from agents.ddpg import DDPGAgent
 
 
 RESULTS_DIR = os.path.join(_HERE, "results")
@@ -46,6 +47,7 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 STATE_DIM = 88
 ACTION_DIM = 7
+ALL_ALGOS = ["a2c", "dqn", "ac", "ddpg"]
 
 DEFAULT_CONFIG = {
     "n_train_episodes": 8,
@@ -65,6 +67,7 @@ ALGO_COLORS = {
     "a2c": "#1f77b4",
     "dqn": "#ff7f0e",
     "ac": "#2ca02c",
+    "ddpg": "#d62728",
     "no_hold": "#7f7f7f",
     "heuristic": "#17becf",
     "gpu_guard": "#9467bd",
@@ -74,6 +77,7 @@ DISPLAY = {
     "a2c": "A2C",
     "dqn": "DQN",
     "ac": "AC",
+    "ddpg": "DDPG",
     "no_hold": "No Hold",
     "heuristic": "Heuristic",
     "gpu_guard": "GPU Guard",
@@ -145,6 +149,16 @@ def build_agent(algo: str, cfg: Dict):
         return DQNAgent(**kwargs)
     if algo == "ac":
         return ACAgent(**kwargs)
+    if algo == "ddpg":
+        return DDPGAgent(
+            state_dim=STATE_DIM,
+            action_dim=1,
+            lr_actor=cfg["lr"],
+            lr_critic=cfg["lr"],
+            gamma=cfg["gamma"],
+            batch_size=cfg["batch_size"],
+            seed=cfg["seed"],
+        )
     raise ValueError(f"Unknown algo: {algo}")
 
 
@@ -166,7 +180,7 @@ def train(agent, env: DAGSchedulingSimulator, n_eps: int, algo: str, cfg: Dict) 
         steps = 0
 
         while True:
-            if algo == "dqn":
+            if algo in ("dqn", "ddpg"):
                 action = agent.select_action(obs)
                 value = None
             else:
@@ -175,7 +189,7 @@ def train(agent, env: DAGSchedulingSimulator, n_eps: int, algo: str, cfg: Dict) 
             obs2, reward, done, info2 = env.step(action)
             obs2 = sanitize_state(obs2)
 
-            if algo == "dqn":
+            if algo in ("dqn", "ddpg"):
                 agent.push(obs, action, reward, obs2, done)
                 agent.update()
             else:
@@ -329,7 +343,7 @@ def plot_training_curves(train_results: Dict, algos: List[str], save_path: str) 
 
 
 def plot_eval_bars(results: Dict, save_path: str) -> None:
-    order = ["no_hold", "heuristic", "gpu_guard", "a2c", "dqn", "ac"]
+    order = ["no_hold", "heuristic", "gpu_guard", "a2c", "dqn", "ac", "ddpg"]
     methods = [name for name in order if name in results]
     labels = [DISPLAY.get(name, name) for name in methods]
     stalls = [results[name].get("pipeline_stalls", 0.0) for name in methods]
@@ -356,7 +370,7 @@ def plot_eval_bars(results: Dict, save_path: str) -> None:
 
 
 def print_table(results: Dict) -> None:
-    order = ["no_hold", "heuristic", "gpu_guard", "a2c", "dqn", "ac"]
+    order = ["no_hold", "heuristic", "gpu_guard", "a2c", "dqn", "ac", "ddpg"]
     methods = [name for name in order if name in results]
     print("\n" + "=" * 92)
     print("  RESULTS TABLE — Phase 3 DAG Scheduling HNH")
@@ -407,7 +421,7 @@ def save_results(results: Dict, train_results: Dict, cfg: Dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase 3 DAG HNH RL")
-    parser.add_argument("--algo", default="all", choices=["all", "a2c", "dqn", "ac"])
+    parser.add_argument("--algo", default="all", choices=["all"] + ALL_ALGOS)
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--duration-s", type=float, default=None)
     parser.add_argument("--max-decisions", type=int, default=None)
@@ -423,7 +437,7 @@ def main() -> None:
     if args.max_decisions is not None:
         cfg["max_hnh_decisions"] = args.max_decisions
 
-    algos = ["a2c", "dqn", "ac"] if args.algo == "all" else [args.algo]
+    algos = ALL_ALGOS if args.algo == "all" else [args.algo]
 
     print("\n" + "=" * 68)
     print("  Phase 3 DAG Scheduling — Hold-or-Not-Hold RL")
