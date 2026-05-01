@@ -17,7 +17,7 @@ expires (not post-episode), using the realised values of A_k, D_k, H_k.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict
 
 from simulator.config import SimConfig
 from simulator.models import ClusterSnapshot, Job, TaskState, TaskStatus
@@ -200,7 +200,26 @@ def attribute_global_reward_delay_tree(
 
     This is the exact mechanism from Malladi et al. §5.1 adapted to DAGs.
     """
-    contributions: Dict[str, float] = {tid: 0.0 for tid in job.tasks}
+    try:
+        from rewardEngineering.delay_tree import DAGDelayTree
+
+        tree = DAGDelayTree()
+        attributed = tree.attribute_job_outcomes(
+            job=job,
+            task_states=task_states,
+            outcome_scale=1.0 / max(cfg.delta_f, 1.0),
+        )
+        contributions: Dict[str, float] = {tid: 0.0 for tid in job.tasks}
+        for task_id, value in attributed.items():
+            if task_id in contributions:
+                contributions[task_id] = float(value)
+        return contributions
+    except Exception:
+        # Keep the original local fallback available if the standalone reward
+        # engineering package is not on sys.path.
+        pass
+
+    contributions = {tid: 0.0 for tid in job.tasks}
 
     for sink_id in job.tasks:
         ts = task_states.get(sink_id)
