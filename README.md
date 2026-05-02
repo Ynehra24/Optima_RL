@@ -1,396 +1,494 @@
-# Optima_RL: Hold-or-Not-Hold RL
+# Optima RL — Hold-or-Not-Hold Reinforcement Learning
 
-This project introduces reinforcement-learning simulators modeled around the **Hold-or-Not-Hold (HNH)** decision problem across three different operational domains. In complex interconnected networks—such as passenger aviation, multi-hub logistics, or large-scale cloud task dependency graphs—delays can propagate and cascade, leading to severe disruptions.
+> *"To hold or not to hold?"* — Malladi et al., AAMAS 2021
 
-Our project explores three separate phases, progressively adapting the HNH problem to different contexts:
-
-1. **Phase 1: Aviation.** Should an outbound connecting flight be held for delayed incoming transfer passengers, or should the aircraft leave on time to avoid downstream scheduling conflicts?
-2. **Phase 2: Freight & Logistics.** Should a freight truck wait at a cross-docking hub for delayed cargo from an incoming truck, or depart to maintain strict delivery schedules?
-3. **Phase 3: Cloud DAG Scheduling.** Should a complex DAG task execution be delayed for struggling prerequisites, or should the scheduler prioritize other sub-graphs to prevent total pipeline stall?
-
-By formalizing this trade-off using a Reinforcement Learning architecture, we evaluate and implement various custom learning agents (A2C, DQN, AC, DDPG) that learn to actively minimize total delay propagation.
-
-The project is inspired by the AAMAS 2021 paper *"To hold or not to hold? - Reducing Passenger Missed Connections in Airlines using Reinforcement Learning"* and extends the same delay-tree reasoning to logistics and cloud scheduling.
+A three-phase study that adapts the **Hold-or-Not-Hold (HNH)** decision problem across progressively complex operational domains, training custom RL agents (A2C, DQN, AC, DDPG) to minimise delay propagation and improve system-wide throughput.
 
 ---
 
-## Repository Layout
+## Table of Contents
+
+1. [Project Overview](#1-project-overview)
+2. [Repository Layout](#2-repository-layout)
+3. [Quick Start — One Command](#3-quick-start--one-command)
+4. [Manual Setup](#4-manual-setup)
+5. [Phase 1 — Airline Network](#5-phase-1--airline-network)
+6. [Phase 2 — Logistics Cross-Docking](#6-phase-2--logistics-cross-docking)
+7. [Phase 3 — Cloud DAG Scheduling](#7-phase-3--cloud-dag-scheduling)
+8. [Algorithms &amp; Hyperparameters](#8-algorithms--hyperparameters)
+9. [Outputs &amp; Artefacts](#9-outputs--artefacts)
+10. [Reference](#10-reference)
+
+---
+
+## 1. Project Overview
+
+Complex interconnected networks — passenger airlines, freight hubs, cloud clusters — share a common challenge: upstream delays propagate and cascade. At every decision point, an operator must choose between **holding** (waiting for late transfers at a cost to the current schedule) or **not holding** (departing on time and accepting missed connections).
+
+This project formalises that trade-off as an RL problem across three domains:
+
+| Phase             | Domain               | Core Decision                                           |
+| ----------------- | -------------------- | ------------------------------------------------------- |
+| **Phase 1** | Airline Network      | Hold connecting flight for delayed passengers?          |
+| **Phase 2** | Freight & Logistics  | Hold cross-dock truck for delayed inbound cargo?        |
+| **Phase 3** | Cloud DAG Scheduling | Delay downstream DAG task for struggling prerequisites? |
+
+All three phases share the same agent zoo (A2C, DQN, AC, DDPG), the same reward structure (α/β-weighted local + global utility), and evaluate against three baseline policies: **No-Hold**, **Heuristic-15**, and **Heuristic-30** (or domain equivalents).
+
+---
+
+## 2. Repository Layout
 
 ```text
-.
-├── phase-1/
-│   ├── simulator/              # Airline network simulator and validation demo
-│   ├── rewardEngineering/      # Airline delay-tree reward attribution
-│   └── algoImplementation/     # A2C, DQN, AC, DDPG training code
-├── phase-2/
-│   ├── simulator/              # Cross-dock logistics environment
-│   ├── rewardEngineering/      # Logistics delay-tree reward attribution
-│   └── algoImplementation/     # A2C, DQN, AC training code
-├── phase-3/
-│   ├── simulator/              # DAG scheduling simulator
-│   ├── rewardEngineering/      # DAG delay-tree attribution helpers
-│   ├── preprocessing/          # Borg/Alibaba calibration scripts
-│   └── algoImplementation/     # A2C, DQN, AC, DDPG training code
-└── README.md
+Optima_RL/
+├── run.sh                          ← Full automated pipeline (start here)
+├── requirements.txt                ← Python dependencies
+├── .gitattributes                  ← Enforces LF line endings for shell scripts
+│
+├── phase-1/                        ← Airline Hold-or-Not-Hold
+│   ├── simulator/                  # Airline network simulator
+│   │   ├── simulator.py            # Core AirlineNetworkSimulator class
+│   │   ├── config.py               # SimConfig (α, β, seeds, schedules)
+│   │   ├── generators.py           # Flight/passenger generation
+│   │   ├── context_engine.py       # State context builder
+│   │   └── run_demo.py             # Quick demo / validation run
+│   ├── rewardEngineering/
+│   │   ├── delay_tree.py           # Delay-tree attribution
+│   │   └── reward_calculator.py    # α/β reward computation
+│   └── algoImplementation/
+│       ├── train.py                # Training + evaluation entry point
+│       ├── environment.py          # Gym-wrapper shim
+│       ├── agents/                 # A2C, DQN, AC, DDPG implementations
+│       └── results/                # Plots + summary JSON (generated)
+│
+├── phase-2/                        ← Logistics Cross-Docking HNH
+│   ├── simulator/
+│   │   ├── logistics_env.py        # Single-hub Gymnasium environment
+│   │   ├── multi_hub_env.py        # 10-hub FAF5 cascading environment
+│   │   ├── hub_chain.py            # Inter-hub dependency engine
+│   │   ├── cargo_manager.py        # Cargo transfer logic
+│   │   ├── bay_manager.py          # Dock bay utilisation
+│   │   └── calibrated/             # Pre-calibrated delay / routing params
+│   ├── rewardEngineering/
+│   │   ├── delay_tree.py           # Logistics delay tree w/ bay attribution
+│   │   └── reward_calculator.py
+│   ├── data/                       # Raw FAF5 / CFS source datasets
+│   └── algoImplementation/
+│       ├── train.py                # Training + evaluation entry point
+│       ├── agents/                 # A2C, DQN, AC, DDPG
+│       └── results/                # Plots + summary JSON (generated)
+│
+└── phase-3/                        ← Cloud DAG Scheduling HNH
+    ├── simulator/
+    │   ├── simulator.py            # DAGSchedulingSimulator
+    │   ├── config.py               # Episode duration, HNH budget, α/β
+    │   ├── models.py               # Task / Job / DAG data models
+    │   ├── generators.py           # Alibaba/Borg trace-calibrated workloads
+    │   ├── state_builder.py        # 88-dim state vector construction
+    │   ├── reward_engine.py        # DAG reward with SLO attribution
+    │   └── calibrated/             # Alibaba + Borg calibration JSONs
+    ├── rewardEngineering/
+    │   └── delay_tree.py           # Causal delay attribution for DAGs
+    ├── preprocessing/
+    │   ├── alibaba_calibration.py  # Calibrate from Alibaba cluster traces
+    │   └── borg_calibration.py     # Calibrate from Google Borg traces
+    └── algoImplementation/
+        ├── train.py                # Training + evaluation entry point
+        ├── benchmark_check.py      # Pass/fail report vs baselines
+        ├── agents/                 # A2C, DQN, AC, DDPG
+        └── results/                # Plots + summary JSON (generated)
 ```
-
-Each phase is self-contained and has its own `simulator`, `rewardEngineering`, and `algoImplementation` package layout. Because the phases reuse package names such as `simulator`, run phase-specific module commands from the phase directory when noted below.
 
 ---
 
-## Setup
+## 3. Quick Start — One Command
 
-You can install all necessary dependencies using the provided `requirements.txt` file.
+> **For evaluators and anyone on Ubuntu 22.04 (including Docker)**
+
+### Option A — Docker (recommended for a clean, reproducible environment)
 
 ```bash
+# 1. Pull the Ubuntu 22.04 image
+docker pull ubuntu:22.04
+
+# 2. Clone the repository (outside the container, or inside — both work)
+git clone https://github.com/Ynehra24/Optima_RL.git
+
+# 3. Run a container, mounting the repo and dropping into bash
+docker run --rm -it \
+    -v "$(pwd)/Optima_RL:/workspace" \
+    -w /workspace \
+    ubuntu:22.04 \
+    bash run.sh
+```
+
+That single `bash run.sh` handles **everything**: system packages, virtual environment, dependencies, all three training phases, evaluation, benchmark check, and consolidated results.
+
+---
+
+### Option B — Native Ubuntu 22.04
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/Ynehra24/Optima_RL.git
+cd Optima_RL
+
+# 2. Run the full pipeline (requires sudo / root for apt-get)
+bash run.sh
+```
+
+> **Note:** `run.sh` calls `apt-get` internally, so it must be run as **root** or with **sudo** in a Docker container (Docker containers run as root by default).
+
+---
+
+### What `run.sh` Does
+
+| Step | Action                                                                                                    |
+| ---- | --------------------------------------------------------------------------------------------------------- |
+| 1    | `apt-get` installs `python3`, `python3-venv`, `python3-dev`, `build-essential`, `libpcap-dev` |
+| 2    | Creates `./venv` and activates the virtual environment                                                  |
+| 3    | `pip install` all Python dependencies                                                                   |
+| 4    | Trains all agents on**Phase 1** (airline, 25 episodes each)                                         |
+| 5    | Trains all agents on**Phase 2** (logistics multi-hub, 25 episodes)                                  |
+| 6    | Trains all agents on**Phase 3** (DAG scheduling, `standard` preset, 30 episodes)                  |
+| 7    | Runs `benchmark_check.py` to generate a pass/fail evaluation report                                     |
+| 8    | Writes `results/run_summary.txt` with metric tables from all three phases                               |
+
+All output lands in `./results/`:
+
+```text
+results/
+├── logs/
+│   ├── phase1_training.log
+│   ├── phase2_training.log
+│   ├── phase3_training.log
+│   └── phase3_benchmark.log
+├── phase1/            ← figures + summary.json
+├── phase2/            ← figures + summary.json
+├── phase3/            ← figures + summary.json + benchmark report
+└── run_summary.txt    ← consolidated metric table
+```
+
+---
+
+## 4. Manual Setup
+
+If you prefer to run phases individually (e.g., on Windows, macOS, or an existing environment):
+
+### Prerequisites
+
+| Requirement | Version                              |
+| ----------- | ------------------------------------ |
+| Python      | ≥ 3.10                              |
+| pip         | ≥ 23                                |
+| libpcap     | (Linux/macOS — needed by `scapy`) |
+
+On Ubuntu/Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3 python3-venv python3-dev build-essential libpcap-dev
+```
+
+On macOS (Homebrew):
+
+```bash
+brew install libpcap
+```
+
+### Create Virtual Environment
+
+```bash
+git clone https://github.com/Ynehra24/Optima_RL.git
+cd Optima_RL
+
 python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
+source .venv/bin/activate          # Linux / macOS
+# .venv\Scripts\activate           # Windows PowerShell
+
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-Core simulator/training code primarily uses custom numpy-based neural networks, `numpy`, and `matplotlib`. Phase 2 imports `gymnasium` with a fallback to `gym`. `pandas` is used by calibration and preprocessing scripts, and `scapy` is used by `phase-3/pcaphelper.py`.
-
-On machines where Matplotlib cannot write to the default user cache, set a local cache directory before training:
+### Verify Installation
 
 ```bash
-mkdir -p .cache/matplotlib
-export MPLCONFIGDIR="$PWD/.cache/matplotlib"
+python -c "import numpy, matplotlib, gymnasium, pandas, scapy; print('All dependencies OK')"
 ```
 
 ---
 
-## Phase 1: Airline HNH
+## 5. Phase 1 — Airline Network
 
-Phase 1 simulates an airline network with passenger connections. The simulator exposes a Gym-like `reset()` / `step()` interface and supports baseline policies such as no-hold and fixed-hold heuristics.
+Simulates an airline network with passenger connections. The RL agent decides, at each flight's scheduled departure, whether to hold for delayed inbound transfer passengers.
 
-Key files:
+### State Space (17-dim)
 
-- `phase-1/simulator/simulator.py` — airline network simulator
-- `phase-1/simulator/run_demo.py` — simulator demo and validation run
-- `phase-1/rewardEngineering/delay_tree.py` — delay-tree attribution
-- `phase-1/algoImplementation/train.py` — RL training and evaluation
+| Component                | Symbol      | Meaning                                   |
+| ------------------------ | ----------- | ----------------------------------------- |
+| Local passenger utility  | `P_L(τ)` | Passenger benefit per hold duration       |
+| Local airline utility    | `A_L(τ)` | Airline delay cost per hold               |
+| Global passenger utility | `P_G`     | Network-wide avg passenger utility (24 h) |
+| Global airline utility   | `A_G`     | Network OTP proxy                         |
+| Locally optimal hold     | `τ*`     | Best τ from local objective              |
+| Reward weights           | `α, β`  | Passenger vs airline, local vs global     |
 
-### State Space for Phase 1 — Aviation (Hold-or-Not-Hold RL)
-Core idea: State = local + global utility forecasts + network context + derived helper
-
-| Component                | Symbol(s) | Type            | Meaning                                          |
-| ------------------------ | --------- | --------------- | ------------------------------------------------ |
-| Full state               | `s_t`     | State           | Complete feature vector at decision time         |
-| Local passenger utility  | `P_L(τ)`  | Forecast vector | Passenger benefit for each hold time             |
-| Local airline utility    | `A_L(τ)`  | Forecast vector | Airline delay cost per hold                      |
-| Global passenger utility | `P_G`     | Scalar          | Avg passenger utility over network (24h window)  |
-| Global airline utility   | `A_G`     | Scalar          | Avg airline performance (OTP proxy)              |
-| Locally optimal hold     | `τ*`      | Derived scalar  | Best τ from local objective (speeds convergence) |
-| Reward weights           | `α, β`    | Scalars         | Trade-offs: PU vs AU, local vs global            |
-
-
-### Sumulator
-Run the simulator demo:
+### Run
 
 ```bash
-cd phase-1
-python3 -m simulator.run_demo
-cd ..
-```
-
-Run the reward-engineering test:
-
-```bash
-cd phase-1
-python3 -m rewardEngineering.test_tree
-cd ..
-```
-
-Train and evaluate RL agents with the standard script defaults:
-
-```bash
+# Train all 4 agents with default settings (25 episodes)
 python3 phase-1/algoImplementation/train.py
-```
 
-Train one algorithm:
-
-```bash
+# Train a single agent
 python3 phase-1/algoImplementation/train.py --algo a2c
+
+# Quick smoke test (2 episodes)
+python3 phase-1/algoImplementation/train.py --episodes 2 --no-sweep
+
+# Run the simulator demo
+cd phase-1 && python3 -m simulator.run_demo && cd ..
+
+# Run reward-engineering tests
+cd phase-1 && python3 -m rewardEngineering.test_tree && cd ..
 ```
 
-Useful options:
+### CLI Options
 
-```bash
-python3 phase-1/algoImplementation/train.py --help
+```
+--algo     {all, a2c, dqn, ac, ddpg}   Agent(s) to train (default: all)
+--episodes N                            Override train episode count
+--no-plots                              Skip figure generation
+--no-sweep                              Skip α/β tunability sweep (Figure 8)
 ```
 
-Results are written under `results/` relative to the directory where the command is run.
+### Outputs
+
+```text
+phase-1/algoImplementation/results/
+├── figure6_missed_otp.png      ← Missed PAX + OTP bar chart
+├── figure6c_delays.png         ← Arrival / departure delays
+├── figure7_rl_metrics.png      ← Reward, value, loss training curves
+├── figure8_tunability.png      ← α/β sweep (A2C)
+├── summary.json                ← All metrics + delta vs baselines
+└── *_agent.pkl                 ← Saved agent weights
+```
 
 ---
 
-## Phase 2: Logistics Cross-Docking HNH
+## 6. Phase 2 — Logistics Cross-Docking
 
-Phase 2 adapts HNH to truck departures, cargo transfers, bay utilization, and missed freight connections. The environment follows the Gymnasium-style API and includes both single-hub and multi-hub modes.
+Adapts HNH to freight hubs. A truck at a cross-docking facility must decide whether to wait for late inbound cargo or depart on schedule. Includes both single-hub and 10-hub cascading network modes.
 
-Key files:
+### State Space (34-dim / 42-dim multi-hub)
 
-- `phase-2/simulator/logistics_env.py` — single-hub logistics environment
-- `phase-2/simulator/multi_hub_env.py` — multi-hub logistics environment
-- `phase-2/simulator/validate_simulator.py` — simulator validation suite
-- `phase-2/rewardEngineering/delay_tree.py` — logistics delay tree with bay-blockage attribution
-- `phase-2/algoImplementation/train.py` — RL training and evaluation
+| Group                         | Key Features                                                                                                                                                            |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Local truck context** | Cargo utility `C_L(τ)`, operator utility `O_L(τ)`, optimal hold `τ*`, cargo value `V_k`, volume fraction `Q_k`, SLA urgency `X_k`, perishability `E_k` |
+| **Transfer context**    | Inbound delay `Δ_in`, transfer slack `Δ_slack`, driver hours `L_k`, deadline pressure `F_k`, number of inbound trucks `N_in`                                |
+| **Global hub context**  | Bay utilisation `B_G`, throughput `W_G`, failure rate `Y_G`, queue depth `Z_G`, global cargo utility `C_G`, global operator utility `O_G`                   |
+| **Delay attribution**   | Departure delay `D_k`, arrival delay `A_k`, bay delay `G_k^bay`, road delay `G_k^road`                                                                          |
 
-### State space for Phase 2 — Logistics Cross-Docking
-Core idea: Extends aviation into rich operational state (truck + hub + constraints)
-
-Local Truck Context (Decision-Critical)
-
-| Component     | Symbol(s) | Type   | Meaning                        |
-| ------------- | --------- | ------ | ------------------------------ |
-| Full state    | `s_t`     | State  | Truck + hub + transfer context |
-| Action        | `τ`       | Action | Hold duration (0–30 min)       |
-| Realised hold | `H_k`     | Actual | Actual applied hold            |
-
-Local Truck Context (Decision-Critical)
-
-| Feature           | Symbol    | Meaning                            |
-| ----------------- | --------- | ---------------------------------- |
-| Cargo utility     | `C_L(τ)`  | Value of successful transfers      |
-| Operator utility  | `O_L(τ)`  | Delay / cost to logistics operator |
-| Optimal hold      | `τ*`      | Local best τ                       |
-| Cargo value       | `V_k`     | Importance of goods                |
-| Volume fraction   | `Q_k`     | % of truck affected                |
-| SLA urgency       | `X_k`     | Delivery strictness                |
-| Perishability     | `E_k`     | Time sensitivity                   |
-| Inbound delay     | `Δ_in`    | ETA lag                            |
-| Transfer slack    | `Δ_slack` | Buffer before departure            |
-| Driver hours      | `L_k`     | Hard constraint                    |
-| Deadline pressure | `F_k`     | Downstream urgency                 |
-| # inbound trucks  | `N_in`    | Complexity of decision             |
-
-Global Hub Context
-
-| Feature                 | Symbol     | Meaning                  |
-| ----------------------- | ---------- | ------------------------ |
-| Global cargo utility    | `C_G`      | System-wide success rate |
-| Global operator utility | `O_G`      | Network efficiency       |
-| Bay utilisation         | `B_G`      | Congestion signal        |
-| Throughput              | `W_G`      | Transfers per hour       |
-| Failure rate            | `Y_G`      | Missed transfers         |
-| Queue depth             | `Z_G`      | System delay             |
-| Departure delay         | `D_k`      | Truck delay              |
-| Arrival delay           | `A_k`      | End-to-end delay         |
-| Bay delay               | `G_k^bay`  | Dock congestion          |
-| Road delay              | `G_k^road` | Transit delay            |
-
-Reward state variables
-
-| Symbol  | Meaning       |
-| ------- | ------------- |
-| `R_T^k` | Total reward  |
-| `R_L^k` | Local reward  |
-| `R_G^k` | Global reward |
-| `α, β`  | Trade-offs    |
-
-
-### Simulator
-
-Run the simulator validation suite:
+### Run
 
 ```bash
-cd phase-2
-python3 -m simulator.validate_simulator
-cd ..
-```
-
-Run the reward-engineering tests:
-
-```bash
-cd phase-2
-python3 -m rewardEngineering.test_tree
-cd ..
-```
-
-Train and evaluate RL agents with the standard script defaults:
-
-```bash
+# Train all agents — single-hub mode (default)
 python3 phase-2/algoImplementation/train.py
-```
 
-Train one algorithm:
-
-```bash
-python3 phase-2/algoImplementation/train.py --algo a2c
-```
-
-Run the multi-hub training mode:
-
-```bash
+# Train all agents — 10-hub cascading network (recommended)
 python3 phase-2/algoImplementation/train.py --multi-hub
+
+# Train a single agent
+python3 phase-2/algoImplementation/train.py --algo dqn --multi-hub
+
+# Quick smoke test
+python3 phase-2/algoImplementation/train.py --episodes 2 --no-sweep
+
+# Run simulator validation suite
+cd phase-2 && python3 -m simulator.validate_simulator && cd ..
+
+# Run reward-engineering tests
+cd phase-2 && python3 -m rewardEngineering.test_tree && cd ..
 ```
 
-Useful options:
+### CLI Options
 
-```bash
-python3 phase-2/algoImplementation/train.py --help
+```
+--algo       {all, a2c, dqn, ac, ddpg}   Agent(s) to train (default: all)
+--episodes   N                            Override train episode count
+--multi-hub                               Enable 10-hub cascading network
+--no-plots                                Skip figure generation
+--no-sweep                                Skip α/β tunability sweep
 ```
 
-Results are written to `phase-2/algoImplementation/results/`.
+### Outputs
+
+```text
+phase-2/algoImplementation/results/
+├── figure6_missed_transfers.png   ← Missed transfers + miss rate
+├── figure6b_bay_delay.png         ← Bay utilisation + departure delay
+├── figure7_rl_metrics.png         ← Training curves
+├── summary.json                   ← All metrics
+└── *_agent.pkl                    ← Saved agent weights
+```
 
 ---
 
-### State space for Phase 3: Cloud DAG Scheduling HNH
+## 7. Phase 3 — Cloud DAG Scheduling
 
-Core idea: State = multi-layer graph + resource + cluster + delay attribution
+Adapts HNH to cloud task scheduling. The agent decides whether to delay a downstream DAG task that is waiting on a struggling upstream dependency, or proceed and risk pipeline stalls and evictions. Calibrated against real Alibaba and Google Borg cluster traces.
 
-RL Meta (Core Carryover)
+### State Space (88-dim)
 
-| Symbol   | Meaning                      |
-| -------- | ---------------------------- |
-| `C_L(τ)` | Pipeline success probability |
-| `O_L(τ)` | Cluster efficiency cost      |
-| `τ*`     | Optimal hold                 |
-| `α`      | Trade-off weight             |
+| Group                       | Key Features                                                                                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RL meta**           | Pipeline success probability `C_L(τ)`, cluster efficiency cost `O_L(τ)`, optimal hold `τ*`, trade-off weight `α`                                                                    |
+| **Task identity**     | Job ID, task index, priority, scheduling class, workload type, GPU type, instance count, task status                                                                                            |
+| **DAG structure**     | Parents, children, descendants, critical-path length, slack time, critical-path flag, depth, fan-out ratio, upstream delay `Δ_in`, job size, DAG completion fraction                         |
+| **Resource demand**   | Planned CPU / memory / GPU, CPU usage, GPU utilisation, avg/max memory usage, resource cost score                                                                                               |
+| **Global cluster**    | CPU/GPU capacity + utilisation, pending/running tasks, idle machines, machine load avg, network utilisation, failed task rate, global pipeline utility `C_G`, global operator utility `O_G` |
+| **Delay attribution** | Start delay `D_k`, completion delay `A_k`, hold applied `H_k`, queue delay `GD_k`, causal influence `ρ(H_k, A_k)`, SLO deadline                                                      |
 
-Task-Level Identity & Priority
+### Training Presets
 
-| Feature          | Symbol             |
-| ---------------- | ------------------ |
-| Job ID           | `job_id`           |
-| Task index       | `task_index`       |
-| Priority         | `priority`         |
-| Scheduling class | `scheduling_class` |
-| Workload type    | `workload_type`    |
-| GPU type         | `gpu_type_spec`    |
-| Instance count   | `inst_num`         |
-| Task status      | `task_status`      |
+| Preset          | Train eps | Test eps | Episode cap | HNH decisions |
+| --------------- | --------- | -------- | ----------- | ------------- |
+| `smoke`       | 2         | 1        | 300 s       | 30            |
+| `standard` ✅ | 30        | 8        | 3,600 s     | 750           |
+| `long`        | 100       | 20       | 7,200 s     | 1,500         |
+| `paper`       | 200       | 30       | 86,400 s    | 5,000         |
 
-DAG Structure
-
-| Feature        | Symbol                    | Meaning                   |
-| -------------- | ------------------------- | ------------------------- |
-| Parents        | `num_parents`             | Blocking dependencies     |
-| Children       | `num_children`            | Immediate impact          |
-| Descendants    | `total_descendants`       | Long-term impact          |
-| Critical path  | `critical_path_len`       | Completion bottleneck     |
-| Slack          | `slack_time`              | Safe delay margin         |
-| Critical flag  | `is_on_critical_path`     | Binary importance         |
-| Depth          | `depth_in_dag`            | Stage of execution        |
-| Fan-out        | `fan_out_ratio`           | Parallel unlock potential |
-| Upstream delay | `Δ_in`                    | Parent delay              |
-| Job size       | `job_size`                | DAG complexity            |
-| Completion %   | `dag_completion_fraction` | Progress                  |
-
-Resource Demand
-
-| Feature         | Symbol                           |
-| --------------- | -------------------------------- |
-| CPU             | `plan_cpu`                       |
-| Memory          | `plan_mem`                       |
-| GPU             | `plan_gpu`                       |
-| CPU usage       | `cpu_usage`                      |
-| GPU utilisation | `gpu_wrk_util`                   |
-| Memory usage    | `avg_mem_usage`, `max_mem_usage` |
-| Resource cost   | `resource_cost_score`            |
-
-Global Cluster State
-
-| Feature                 | Symbol                 |
-| ----------------------- | ---------------------- |
-| CPU capacity            | `total_cpu_capacity`   |
-| GPU capacity            | `total_gpu_capacity`   |
-| CPU util                | `cpu_util`             |
-| GPU util                | `gpu_util`             |
-| Pending tasks           | `num_pending_tasks`    |
-| Running tasks           | `num_running_tasks`    |
-| Idle machines           | `num_idle_machines`    |
-| Load avg                | `machine_load_avg`     |
-| Network util            | `network_receive_util` |
-| Failure rate            | `failed_task_rate_G`   |
-| Global pipeline utility | `C_G`                  |
-| Global operator utility | `O_G`                  |
-
-Delay Tree (Causal Attribution)
-
-| Symbol           | Meaning          |
-| ---------------- | ---------------- |
-| `D_k`            | Start delay      |
-| `A_k`            | Completion delay |
-| `H_k`            | Hold applied     |
-| `GD_k`           | Queue delay      |
-| `ρ(H_k, A_k)`    | Causal influence |
-| `SLO_deadline_k` | Hard constraint  |
-
-Reward Variables
-
-| Symbol   | Meaning         |
-| -------- | --------------- |
-| `R_T_k`  | Total reward    |
-| `R_L_k`  | Local reward    |
-| `R_G_k`  | Global reward   |
-| `β`      | Trade-off       |
-| `σ_i(τ)` | Task disutility |
-
-
-### Simulator
-Run the simulator demo:
+### Run
 
 ```bash
-python3 phase-3/simulator/run_demo.py
-```
-
-Run the delay-tree smoke tests:
-
-```bash
-cd phase-3/rewardEngineering
-python3 test_tree.py
-cd ../..
-```
-
-Train and evaluate RL agents with the standard preset:
-
-```bash
+# Train all agents — standard preset (recommended)
 python3 phase-3/algoImplementation/train.py --preset standard
-```
 
-Train one algorithm with the standard preset:
+# Quick smoke test (~1 min)
+python3 phase-3/algoImplementation/train.py --preset smoke
 
-```bash
+# Train a single agent
 python3 phase-3/algoImplementation/train.py --preset standard --algo a2c
+
+# Run the simulator demo
+python3 phase-3/simulator/run_demo.py
+
+# Run delay-tree smoke tests
+cd phase-3/rewardEngineering && python3 test_tree.py && cd ../..
 ```
 
-Other available presets are `smoke`, `long`, and `paper`, but `standard` is the normal training run used by default in the Phase 3 script.
+### Benchmark Check
 
-Useful options:
+After training, verify whether RL agents beat the baselines:
 
 ```bash
-python3 phase-3/algoImplementation/train.py --help
+# Check all agents against no_hold, heuristic, and gpu_guard
+python3 phase-3/algoImplementation/benchmark_check.py \
+    --summary phase-3/algoImplementation/results/summary.json \
+    --all-agents \
+    --output phase-3/algoImplementation/training_logs/benchmark.log
 ```
 
-Results are written to `phase-3/algoImplementation/results/`.
+### CLI Options
+
+```
+--algo           {all, a2c, dqn, ac, ddpg}    Agent(s) to train (default: all)
+--preset         {smoke, standard, long, paper} Training budget preset
+--episodes       N                              Override train episode count
+--test-episodes  N                              Override test episode count
+--duration-s     SECONDS                        Override episode wall-clock cap
+--max-decisions  N                              Override max HNH decisions/episode
+--run-name       NAME                           Tag for output files
+--no-plots                                      Skip figure generation
+```
+
+### Outputs
+
+```text
+phase-3/algoImplementation/results/
+├── phase3_training_curves.png    ← Step reward, episode reward, loss
+├── phase3_eval_bars.png          ← Pipeline stalls + eviction rate
+├── summary.json                  ← All metrics (shared + run-specific)
+├── <run-name>_summary.json       ← Run-specific JSON
+└── *_agent.pkl                   ← Saved agent weights
+
+phase-3/algoImplementation/training_logs/
+└── <run-name>_benchmark.log      ← Pass/fail report vs baselines
+```
 
 ---
 
-## Training Defaults
+## 8. Algorithms & Hyperparameters
 
-Current defaults in the training scripts:
+All agents are implemented from scratch using pure NumPy — no deep-learning framework dependency.
 
-| Phase | Algorithms | Default train/test budget |
-| --- | --- | --- |
-| Phase 1 | A2C, DQN, AC, DDPG | 25 train episodes, 5 test episodes |
-| Phase 2 | A2C, DQN, AC | 25 train episodes, 5 test episodes |
-| Phase 3 | A2C, DQN, AC, DDPG | `standard` preset: 30 train episodes, 8 test episodes, 3,600s episode cap, 750 HNH decisions |
+| Agent          | Type                      | Key Architecture                                 |
+| -------------- | ------------------------- | ------------------------------------------------ |
+| **A2C**  | Actor-Critic (on-policy)  | Shared MLP backbone, policy + value heads, GAE   |
+| **DQN**  | Value-based (off-policy)  | MLP Q-network, experience replay, ε-greedy      |
+| **AC**   | Actor-Critic (on-policy)  | Separate actor/critic MLPs, REINFORCE baseline   |
+| **DDPG** | Actor-Critic (off-policy) | Continuous actor → discretised, target networks |
 
-All phases evaluate baseline policies and trained RL policies, then save summaries and plots where supported.
+### Shared Defaults
+
+| Hyperparameter                | Value  |
+| ----------------------------- | ------ |
+| Learning rate `lr`          | 0.0001 |
+| Discount `γ`               | 0.8    |
+| Batch size                    | 32     |
+| Passenger/cargo weight `α` | 0.75   |
+| Local/global weight `β`    | 0.75   |
+| Random seed                   | 42     |
+
+### Hold Actions (all phases)
+
+```
+Index:  0    1    2    3    4    5    6
+Hold:   0   5   10   15   20   25   30  minutes
+```
 
 ---
 
-## Notes and Known Caveats
+## 9. Outputs & Artefacts
 
-- The repository currently does not include a pinned dependency file.
-- Phase 1 demo commands should be run as modules from `phase-1` because `run_demo.py` uses package-relative imports.
-- Phase 2 needs `gymnasium` or `gym` installed before validation or training.
-- Phase 2 does not currently contain a `simulator/run_demo.py`; use `simulator.validate_simulator` for simulator checks.
-- Phase 3 training defaults to the `standard` preset if no preset is supplied, but the README commands pass `--preset standard` explicitly for clarity.
+When run via `run.sh`, all artefacts are mirrored into a top-level `results/` directory:
+
+```text
+results/
+├── run_summary.txt              ← Human-readable table: all phases
+├── logs/
+│   ├── phase1_training.log      ← Full stdout from Phase 1 train.py
+│   ├── phase2_training.log      ← Full stdout from Phase 2 train.py
+│   ├── phase3_training.log      ← Full stdout from Phase 3 train.py
+│   └── phase3_benchmark.log     ← benchmark_check.py output
+├── phase1/
+│   ├── summary.json             ← OTP, missed PAX, delays, holds %
+│   ├── figure6_missed_otp.png
+│   ├── figure6c_delays.png
+│   ├── figure7_rl_metrics.png
+│   └── figure8_tunability.png
+├── phase2/
+│   ├── summary.json             ← Miss rate, OTP, bay utilisation
+│   ├── figure6_missed_transfers.png
+│   ├── figure6b_bay_delay.png
+│   └── figure7_rl_metrics.png
+└── phase3/
+    ├── summary.json             ← Completed %, evictions, stalls, reward
+    ├── eval_run_summary.json
+    ├── phase3_training_curves.png
+    ├── phase3_eval_bars.png
+    └── eval_run_benchmark.log   ← Pass/fail vs baselines
+```
 
 ---
 
-## Reference
+## 10. Reference
 
-Malladi, T., Murugappan, K., Sudarsanam, D., Suriyanarayanan, R., & Vasan, A. (2021). *To hold or not to hold? - Reducing Passenger Missed Connections in Airlines using Reinforcement Learning.* AAMAS 2021, 862-870.
+Malladi, T., Murugappan, K., Sudarsanam, D., Suriyanarayanan, R., & Vasan, A. (2021).
+*To hold or not to hold? — Reducing Passenger Missed Connections in Airlines using Reinforcement Learning.*
+**AAMAS 2021**, 862–870.
+
+---
+
+<p align="center">
+  <sub>Optima RL · Three-Phase Hold-or-Not-Hold Study · Built for AAMAS 2021 Extension</sub>
+</p>
