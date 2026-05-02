@@ -71,54 +71,21 @@ Key files:
 - `phase-1/rewardEngineering/delay_tree.py` — delay-tree attribution
 - `phase-1/algoImplementation/train.py` — RL training and evaluation
 
-## State Space Mapping — Aviation Hold-or-Not-Hold (Baseline)
+### State Space for Phase 1 — Aviation (Hold-or-Not-Hold RL)
+Core idea: State = local + global utility forecasts + network context + derived helper
 
-### State Definition
-At each decision epoch `t`, the RL agent observes:
+| Component                | Symbol(s) | Type            | Meaning                                          |
+| ------------------------ | --------- | --------------- | ------------------------------------------------ |
+| Full state               | `s_t`     | State           | Complete feature vector at decision time         |
+| Local passenger utility  | `P_L(τ)`  | Forecast vector | Passenger benefit for each hold time             |
+| Local airline utility    | `A_L(τ)`  | Forecast vector | Airline delay cost per hold                      |
+| Global passenger utility | `P_G`     | Scalar          | Avg passenger utility over network (24h window)  |
+| Global airline utility   | `A_G`     | Scalar          | Avg airline performance (OTP proxy)              |
+| Locally optimal hold     | `τ*`      | Derived scalar  | Best τ from local objective (speeds convergence) |
+| Reward weights           | `α, β`    | Scalars         | Trade-offs: PU vs AU, local vs global            |
 
-s_t = {\
-    PL(τ),        # Local Passenger Utility vector\
-    
-    AL(τ),        # Local Airline Utility vector\
-    
-    PG,           # Global Passenger Utility (24h window)\
-    
-    AG,           # Global Airline Utility (24h window)\
-    
-    τ*,           # Locally optimal hold time\
-}
 
-### Local State (Flight-Level)
-- PL(τ): Expected passenger utility for each hold duration τ
-- AL(τ): Expected airline utility (delay cost) for each τ
-- τ*: argmax over α·PL(τ) + (1−α)·AL(τ)
-
-### Global State (Network-Level)
-- PG: Average passenger utility across network (past 24h)
-- AG: Average airline utility across network (past 24h)
-
-### Action
-- τ ∈ {0, 5, 10, 15, 20, 25, 30} minutes (or continuous [0,30])
-
-### Reward Structure
-- R_T = β·R_L + (1−β)·R_G
-- R_L = α·P_L + (1−α)·A_L
-- R_G = α·P_G + (1−α)·A_G
-
-### Delay Tree Variables (for attribution)
-- D_i: Departure delay
-- A_i: Arrival delay
-- H_i: Hold duration
-- GD_i: Ground delay
-- GA_i: Arrival congestion delay
-- T_i: Air-time delay
-
-### Key Insight
-State combines:
-- Forward-looking local forecasts (PL, AL)
-- Backward-looking global health (PG, AG)
-- Precomputed optimal action prior (τ*)
-
+### Sumulator
 Run the simulator demo:
 
 ```bash
@@ -169,89 +136,60 @@ Key files:
 - `phase-2/rewardEngineering/delay_tree.py` — logistics delay tree with bay-blockage attribution
 - `phase-2/algoImplementation/train.py` — RL training and evaluation
 
-## State Space Mapping — Logistics Cross-Docking (Phase 2)
+### State space for Phase 2 — Logistics Cross-Docking
+Core idea: Extends aviation into rich operational state (truck + hub + constraints)
 
-### State Definition
-At each decision epoch `t`, for outbound truck k:
+Local Truck Context (Decision-Critical)
 
-s_t = {\
-    CL(τ), OL(τ), τ*,        # Local forecast + optimal action\
-    
-    Vk, Qk, Xk, Ek,          # Cargo characteristics\
+| Component     | Symbol(s) | Type   | Meaning                        |
+| ------------- | --------- | ------ | ------------------------------ |
+| Full state    | `s_t`     | State  | Truck + hub + transfer context |
+| Action        | `τ`       | Action | Hold duration (0–30 min)       |
+| Realised hold | `H_k`     | Actual | Actual applied hold            |
 
-    Δin, Δslack,             # Timing dynamics\
-    
-    Lk, Fk, Nin,             # Operational constraints\
-    
-    CG, OG,                  # Global utility (24h)\
-    
-    BG, WG, YG, ZG,          # Hub congestion metrics\
-    
-    Dk, Ak,                  # Delay variables\
-    
-    Gk_bay, Gk_road          # Delay decomposition\ 
-}
+Local Truck Context (Decision-Critical)
 
----
+| Feature           | Symbol    | Meaning                            |
+| ----------------- | --------- | ---------------------------------- |
+| Cargo utility     | `C_L(τ)`  | Value of successful transfers      |
+| Operator utility  | `O_L(τ)`  | Delay / cost to logistics operator |
+| Optimal hold      | `τ*`      | Local best τ                       |
+| Cargo value       | `V_k`     | Importance of goods                |
+| Volume fraction   | `Q_k`     | % of truck affected                |
+| SLA urgency       | `X_k`     | Delivery strictness                |
+| Perishability     | `E_k`     | Time sensitivity                   |
+| Inbound delay     | `Δ_in`    | ETA lag                            |
+| Transfer slack    | `Δ_slack` | Buffer before departure            |
+| Driver hours      | `L_k`     | Hard constraint                    |
+| Deadline pressure | `F_k`     | Downstream urgency                 |
+| # inbound trucks  | `N_in`    | Complexity of decision             |
 
-### Local State (Truck-Level)
-- CL(τ): Cargo utility (value-weighted SLA success)
-- OL(τ): Operator utility (delay + congestion penalty)
-- τ*: argmax over α·CL(τ) + (1−α)·OL(τ)
+Global Hub Context
 
-Cargo Features:
-- Vk: Cargo value score
-- Qk: Volume fraction
-- Xk: SLA urgency level
-- Ek: Perishability fraction
+| Feature                 | Symbol     | Meaning                  |
+| ----------------------- | ---------- | ------------------------ |
+| Global cargo utility    | `C_G`      | System-wide success rate |
+| Global operator utility | `O_G`      | Network efficiency       |
+| Bay utilisation         | `B_G`      | Congestion signal        |
+| Throughput              | `W_G`      | Transfers per hour       |
+| Failure rate            | `Y_G`      | Missed transfers         |
+| Queue depth             | `Z_G`      | System delay             |
+| Departure delay         | `D_k`      | Truck delay              |
+| Arrival delay           | `A_k`      | End-to-end delay         |
+| Bay delay               | `G_k^bay`  | Dock congestion          |
+| Road delay              | `G_k^road` | Transit delay            |
 
-Timing Features:
-- Δin: Inbound delay (ETA lag)
-- Δslack: Transfer slack
+Reward state variables
 
-Constraints:
-- Lk: Driver hours remaining (hard cap)
-- Fk: Downstream deadline pressure
-- Nin: Number of inbound trucks
+| Symbol  | Meaning       |
+| ------- | ------------- |
+| `R_T^k` | Total reward  |
+| `R_L^k` | Local reward  |
+| `R_G^k` | Global reward |
+| `α, β`  | Trade-offs    |
 
----
 
-### Global State (Hub-Level)
-- CG: Global cargo utility (24h)
-- OG: Global operator utility (24h)
-- BG: Bay utilisation (congestion)
-- WG: Throughput rate
-- YG: Failed transfer rate
-- ZG: Inbound queue depth
-
----
-
-### Delay Tree Variables
-- Dk: Departure delay
-- Ak: Arrival delay
-- Gk_bay: Dock congestion delay
-- Gk_road: Road delay
-- Hk: Hold duration
-
----
-
-### Action
-- τ ∈ {0, 5, 10, ..., 30} or continuous
-
----
-
-### Reward Structure
-- R_T_k = β·R_L_k + (1−β)·R_G_k
-- R_L_k = α·CL_k + (1−α)·OL_k
-- R_G_k = α·CG_k + (1−α)·OG_k
-
----
-
-### Key Insight
-State expands baseline by adding:
-- Cargo semantics (value, perishability, SLA)
-- Physical constraints (driver hours, bays)
-- System congestion signals (BG, ZG)
+### Simulator
 
 Run the simulator validation suite:
 
@@ -297,117 +235,100 @@ Results are written to `phase-2/algoImplementation/results/`.
 
 ---
 
-## Phase 3: Cloud DAG Scheduling HNH
+### State space for Phase 3: Cloud DAG Scheduling HNH
 
-Phase 3 maps HNH to DAG scheduling, where a task can wait for upstream dependencies or start immediately and risk stalls, failed parents, or inefficient resource usage. The state vector has 88 dimensions and the action space is seven hold durations in seconds.
+Core idea: State = multi-layer graph + resource + cluster + delay attribution
 
-Key files:
+RL Meta (Core Carryover)
 
-- `phase-3/simulator/simulator.py` — DAG scheduling simulator
-- `phase-3/simulator/run_demo.py` — baseline policy comparison
-- `phase-3/simulator/reward_engine.py` — local/global reward computation
-- `phase-3/rewardEngineering/delay_tree.py` — DAG delay tree
-- `phase-3/algoImplementation/train.py` — RL training and evaluation
-- `phase-3/algoImplementation/benchmark_check.py` — benchmark/result checks
+| Symbol   | Meaning                      |
+| -------- | ---------------------------- |
+| `C_L(τ)` | Pipeline success probability |
+| `O_L(τ)` | Cluster efficiency cost      |
+| `τ*`     | Optimal hold                 |
+| `α`      | Trade-off weight             |
 
-## State Space Mapping — Cloud DAG Scheduling (Phase 3)
+Task-Level Identity & Priority
 
-### State Definition
-At each decision epoch `t`, for task k:
+| Feature          | Symbol             |
+| ---------------- | ------------------ |
+| Job ID           | `job_id`           |
+| Task index       | `task_index`       |
+| Priority         | `priority`         |
+| Scheduling class | `scheduling_class` |
+| Workload type    | `workload_type`    |
+| GPU type         | `gpu_type_spec`    |
+| Instance count   | `inst_num`         |
+| Task status      | `task_status`      |
 
-s_t = {
-    # Core RL Meta\
-    CL(τ), OL(τ), τ*, α,\
-    # Task Identity & Priority\
-    job_id, task_index, priority,\
-    scheduling_class, workload_type,\
-    gpu_type_spec, inst_num, task_status,\
-    # DAG Structure\
-    num_parents, num_children, total_descendants,\
-    critical_path_len, slack_time, is_on_critical_path,\
-    depth_in_dag, fan_out_ratio,\
-    upstream_delay, job_size, dag_completion_fraction,\
-    # Resource Demands\
-    plan_cpu, plan_mem, plan_gpu,\
-    cpu_usage, gpu_wrk_util,\
-    avg_mem_usage, max_mem_usage,\
-    resource_cost_score,\
-    # Global Cluster State\
-    total_cpu_capacity, total_gpu_capacity,\
-    cpu_util, gpu_util,\
-    num_pending_tasks, num_running_tasks,\
-    num_idle_machines, machine_load_avg,\
-    network_receive_util,\
-    failed_task_rate_G,\
-    global_pipeline_utility_G,\
-    global_operator_utility_G,\
-    # Delay Tree\
-    D_k, A_k, H_k, GD_k,\
-    rho_H_A, SLO_deadline_k\
-}
+DAG Structure
 
----
+| Feature        | Symbol                    | Meaning                   |
+| -------------- | ------------------------- | ------------------------- |
+| Parents        | `num_parents`             | Blocking dependencies     |
+| Children       | `num_children`            | Immediate impact          |
+| Descendants    | `total_descendants`       | Long-term impact          |
+| Critical path  | `critical_path_len`       | Completion bottleneck     |
+| Slack          | `slack_time`              | Safe delay margin         |
+| Critical flag  | `is_on_critical_path`     | Binary importance         |
+| Depth          | `depth_in_dag`            | Stage of execution        |
+| Fan-out        | `fan_out_ratio`           | Parallel unlock potential |
+| Upstream delay | `Δ_in`                    | Parent delay              |
+| Job size       | `job_size`                | DAG complexity            |
+| Completion %   | `dag_completion_fraction` | Progress                  |
 
-### Core Local State
-- CL(τ): Pipeline utility (downstream completion success)
-- OL(τ): Cluster efficiency cost
-- τ*: argmax over α·CL(τ) + (1−α)·OL(τ)
+Resource Demand
 
----
+| Feature         | Symbol                           |
+| --------------- | -------------------------------- |
+| CPU             | `plan_cpu`                       |
+| Memory          | `plan_mem`                       |
+| GPU             | `plan_gpu`                       |
+| CPU usage       | `cpu_usage`                      |
+| GPU utilisation | `gpu_wrk_util`                   |
+| Memory usage    | `avg_mem_usage`, `max_mem_usage` |
+| Resource cost   | `resource_cost_score`            |
 
-### DAG Structure Features (Critical Addition)
-- num_parents / children / descendants
-- critical_path_len
-- slack_time (key decision variable)
-- is_on_critical_path
-- upstream_delay
+Global Cluster State
 
----
+| Feature                 | Symbol                 |
+| ----------------------- | ---------------------- |
+| CPU capacity            | `total_cpu_capacity`   |
+| GPU capacity            | `total_gpu_capacity`   |
+| CPU util                | `cpu_util`             |
+| GPU util                | `gpu_util`             |
+| Pending tasks           | `num_pending_tasks`    |
+| Running tasks           | `num_running_tasks`    |
+| Idle machines           | `num_idle_machines`    |
+| Load avg                | `machine_load_avg`     |
+| Network util            | `network_receive_util` |
+| Failure rate            | `failed_task_rate_G`   |
+| Global pipeline utility | `C_G`                  |
+| Global operator utility | `O_G`                  |
 
-### Resource Features
-- Requested: CPU, memory, GPU
-- Actual: utilisation metrics
-- resource_cost_score (composite opportunity cost)
+Delay Tree (Causal Attribution)
 
----
+| Symbol           | Meaning          |
+| ---------------- | ---------------- |
+| `D_k`            | Start delay      |
+| `A_k`            | Completion delay |
+| `H_k`            | Hold applied     |
+| `GD_k`           | Queue delay      |
+| `ρ(H_k, A_k)`    | Causal influence |
+| `SLO_deadline_k` | Hard constraint  |
 
-### Global Cluster State
-- Resource utilisation (cpu_util, gpu_util)
-- Queue pressure (num_pending_tasks)
-- Capacity signals (idle machines)
-- Stability signals (failed_task_rate_G)
-- Global performance (pipeline + operator utility)
+Reward Variables
 
----
+| Symbol   | Meaning         |
+| -------- | --------------- |
+| `R_T_k`  | Total reward    |
+| `R_L_k`  | Local reward    |
+| `R_G_k`  | Global reward   |
+| `β`      | Trade-off       |
+| `σ_i(τ)` | Task disutility |
 
-### Delay Tree Variables
-- D_k: Start delay
-- A_k: Completion delay
-- H_k: Hold duration
-- GD_k: Queue delay
-- ρ(H_k, A_k): causal attribution
-- SLO_deadline_k: hard constraint
 
----
-
-### Action
-- τ ∈ {0, 15, 30, 60, 120} seconds or continuous
-
----
-
-### Reward Structure
-- R_T_k = β·R_L_k + (1−β)·R_G_k
-- R_L_k = α·CL_k + (1−α)·OL_k
-- R_G_k = α·CG_k + (1−α)·OG_k
-
----
-
-### Key Insight
-State generalizes previous domains by introducing:
-- Graph structure (DAG topology + critical path)
-- Fine-grained resource economics (GPU/CPU/memory)
-- Cluster-level congestion + stability signals
-
+### Simulator
 Run the simulator demo:
 
 ```bash
