@@ -82,7 +82,7 @@ s_t = {\
     PG,           # Global Passenger Utility (24h window)\
     AG,           # Global Airline Utility (24h window)\
     τ*,           # Locally optimal hold time\
-}\
+}
 
 ### Local State (Flight-Level)
 - PL(τ): Expected passenger utility for each hold duration τ
@@ -179,7 +179,7 @@ s_t = {\
     BG, WG, YG, ZG,          # Hub congestion metrics\
     Dk, Ak,                  # Delay variables\
     Gk_bay, Gk_road          # Delay decomposition\
-}\
+}
 
 ---
 
@@ -333,7 +333,7 @@ s_t = {
     # Delay Tree\
     D_k, A_k, H_k, GD_k,\
     rho_H_A, SLO_deadline_k\
-}\
+}
 
 ---
 
