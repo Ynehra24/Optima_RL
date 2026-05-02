@@ -85,6 +85,7 @@ Desktop.ini
 *.md
 !README.md
 *.txt
+!requirements.txt
 
 # Postman
 .postman/

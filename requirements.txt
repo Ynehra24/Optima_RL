@@ -1,0 +1,12 @@
+# Core numerical stack used by all three phases.
+numpy>=1.26
+matplotlib>=3.8
+
+# Phase 2 logistics environments use the Gymnasium API.
+gymnasium>=0.29
+
+# Phase 2/3 dataset preprocessing and calibration scripts.
+pandas>=2.1
+
+# Optional Phase 3 packet-capture helper.
+scapy>=2.5
