@@ -78,9 +78,13 @@ At each decision epoch `t`, the RL agent observes:
 
 s_t = {\
     PL(τ),        # Local Passenger Utility vector\
+    
     AL(τ),        # Local Airline Utility vector\
+    
     PG,           # Global Passenger Utility (24h window)\
+    
     AG,           # Global Airline Utility (24h window)\
+    
     τ*,           # Locally optimal hold time\
 }
 
