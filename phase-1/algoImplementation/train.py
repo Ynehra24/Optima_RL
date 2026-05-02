@@ -26,7 +26,9 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+# ── Paths ──────────────────────────────────────────────────────────────────────
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_HERE, ".."))
 from simulator.simulator import AirlineNetworkSimulator
 from simulator.config    import SimConfig
 from agents.dqn  import DQNAgent
@@ -52,7 +54,7 @@ DEFAULT_CONFIG = {
     "seed":             42,
 }
 
-RESULTS_DIR = "results"
+RESULTS_DIR = os.path.join(_HERE, "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 ALGO_COLORS = {
