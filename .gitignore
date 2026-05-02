@@ -120,3 +120,8 @@ Project_Proposal.pdf
 extract_pdf.py
 
 */training_logs/
+
+*/results/
+.matplotlib-cache/
+*/.matplotlib-cache/
+*.pkl
