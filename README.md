@@ -1,14 +1,16 @@
-# Hold-or-Not-Hold RL
+# Optima_RL: Hold-or-Not-Hold RL
 
-Reinforcement-learning simulators for the **Hold-or-Not-Hold (HNH)** decision problem across three domains:
+This project introduces reinforcement-learning simulators modeled around the **Hold-or-Not-Hold (HNH)** decision problem across three different operational domains. In complex interconnected networks—such as passenger aviation, multi-hub logistics, or large-scale cloud task dependency graphs—delays can propagate and cascade, leading to severe disruptions.
 
-1. **Phase 1:** airline passenger connections
-2. **Phase 2:** freight cross-docking and cargo transfers
-3. **Phase 3:** cloud DAG task scheduling
+Our project explores three separate phases, progressively adapting the HNH problem to different contexts:
 
-The shared question is: when an outbound vehicle or task has delayed dependencies, should the system hold it briefly, or let it leave/start on time and accept missed connections, failed transfers, or pipeline stalls?
+1. **Phase 1: Aviation.** Should an outbound connecting flight be held for delayed incoming transfer passengers, or should the aircraft leave on time to avoid downstream scheduling conflicts?
+2. **Phase 2: Freight & Logistics.** Should a freight truck wait at a cross-docking hub for delayed cargo from an incoming truck, or depart to maintain strict delivery schedules?
+3. **Phase 3: Cloud DAG Scheduling.** Should a complex DAG task execution be delayed for struggling prerequisites, or should the scheduler prioritize other sub-graphs to prevent total pipeline stall?
 
-The project is inspired by the AAMAS 2021 paper *"To hold or not to hold? - Reducing Passenger Missed Connections in Airlines using Reinforcement Learning"* and extends the same idea to logistics and cloud scheduling.
+By formalizing this trade-off using a Reinforcement Learning architecture, we evaluate and implement various custom learning agents (A2C, DQN, AC, DDPG) that learn to actively minimize total delay propagation.
+
+The project is inspired by the AAMAS 2021 paper *"To hold or not to hold? - Reducing Passenger Missed Connections in Airlines using Reinforcement Learning"* and extends the same delay-tree reasoning to logistics and cloud scheduling.
 
 ---
 
@@ -38,16 +40,16 @@ Each phase is self-contained and has its own `simulator`, `rewardEngineering`, a
 
 ## Setup
 
-There is no `requirements.txt` in the repository, so install the Python packages used by the current code directly.
+You can install all necessary dependencies using the provided `requirements.txt` file.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
-python3 -m pip install numpy matplotlib gymnasium pandas scapy
+python3 -m pip install -r requirements.txt
 ```
 
-Core simulator/training code uses `numpy` and `matplotlib`. Phase 2 imports `gymnasium` with a fallback to `gym`; installing `gymnasium` is the simplest path. `pandas` is used by calibration/preprocessing scripts, and `scapy` is used by `phase-3/pcaphelper.py`.
+Core simulator/training code primarily uses custom numpy-based neural networks, `numpy`, and `matplotlib`. Phase 2 imports `gymnasium` with a fallback to `gym`. `pandas` is used by calibration and preprocessing scripts, and `scapy` is used by `phase-3/pcaphelper.py`.
 
 On machines where Matplotlib cannot write to the default user cache, set a local cache directory before training:
 
