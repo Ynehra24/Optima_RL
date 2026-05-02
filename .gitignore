@@ -126,3 +126,6 @@ extract_pdf.py
 .matplotlib-cache/
 */.matplotlib-cache/
 *.pkl
+
+# Always track the automation script
+!run.sh
