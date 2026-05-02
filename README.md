@@ -76,13 +76,13 @@ Key files:
 ### State Definition
 At each decision epoch `t`, the RL agent observes:
 
-s_t = {
-    PL(τ),        # Local Passenger Utility vector
-    AL(τ),        # Local Airline Utility vector
-    PG,           # Global Passenger Utility (24h window)
-    AG,           # Global Airline Utility (24h window)
-    τ*,           # Locally optimal hold time
-}
+s_t = {\
+    PL(τ),        # Local Passenger Utility vector\
+    AL(τ),        # Local Airline Utility vector\
+    PG,           # Global Passenger Utility (24h window)\
+    AG,           # Global Airline Utility (24h window)\
+    τ*,           # Locally optimal hold time\
+}\
 
 ### Local State (Flight-Level)
 - PL(τ): Expected passenger utility for each hold duration τ
@@ -170,16 +170,16 @@ Key files:
 ### State Definition
 At each decision epoch `t`, for outbound truck k:
 
-s_t = {
-    CL(τ), OL(τ), τ*,        # Local forecast + optimal action
-    Vk, Qk, Xk, Ek,          # Cargo characteristics
-    Δin, Δslack,             # Timing dynamics
-    Lk, Fk, Nin,             # Operational constraints
-    CG, OG,                  # Global utility (24h)
-    BG, WG, YG, ZG,          # Hub congestion metrics
-    Dk, Ak,                  # Delay variables
-    Gk_bay, Gk_road          # Delay decomposition
-}
+s_t = {\
+    CL(τ), OL(τ), τ*,        # Local forecast + optimal action\
+    Vk, Qk, Xk, Ek,          # Cargo characteristics\
+    Δin, Δslack,             # Timing dynamics\
+    Lk, Fk, Nin,             # Operational constraints\
+    CG, OG,                  # Global utility (24h)\
+    BG, WG, YG, ZG,          # Hub congestion metrics\
+    Dk, Ak,                  # Delay variables\
+    Gk_bay, Gk_road          # Delay decomposition\
+}\
 
 ---
 
@@ -305,40 +305,35 @@ Key files:
 At each decision epoch `t`, for task k:
 
 s_t = {
-    # Core RL Meta
-    CL(τ), OL(τ), τ*, α,
-
-    # Task Identity & Priority
-    job_id, task_index, priority,
-    scheduling_class, workload_type,
-    gpu_type_spec, inst_num, task_status,
-
-    # DAG Structure
-    num_parents, num_children, total_descendants,
-    critical_path_len, slack_time, is_on_critical_path,
-    depth_in_dag, fan_out_ratio,
-    upstream_delay, job_size, dag_completion_fraction,
-
-    # Resource Demands
-    plan_cpu, plan_mem, plan_gpu,
-    cpu_usage, gpu_wrk_util,
-    avg_mem_usage, max_mem_usage,
-    resource_cost_score,
-
-    # Global Cluster State
-    total_cpu_capacity, total_gpu_capacity,
-    cpu_util, gpu_util,
-    num_pending_tasks, num_running_tasks,
-    num_idle_machines, machine_load_avg,
-    network_receive_util,
-    failed_task_rate_G,
-    global_pipeline_utility_G,
-    global_operator_utility_G,
-
-    # Delay Tree
-    D_k, A_k, H_k, GD_k,
-    rho_H_A, SLO_deadline_k
-}
+    # Core RL Meta\
+    CL(τ), OL(τ), τ*, α,\
+    # Task Identity & Priority\
+    job_id, task_index, priority,\
+    scheduling_class, workload_type,\
+    gpu_type_spec, inst_num, task_status,\
+    # DAG Structure\
+    num_parents, num_children, total_descendants,\
+    critical_path_len, slack_time, is_on_critical_path,\
+    depth_in_dag, fan_out_ratio,\
+    upstream_delay, job_size, dag_completion_fraction,\
+    # Resource Demands\
+    plan_cpu, plan_mem, plan_gpu,\
+    cpu_usage, gpu_wrk_util,\
+    avg_mem_usage, max_mem_usage,\
+    resource_cost_score,\
+    # Global Cluster State\
+    total_cpu_capacity, total_gpu_capacity,\
+    cpu_util, gpu_util,\
+    num_pending_tasks, num_running_tasks,\
+    num_idle_machines, machine_load_avg,\
+    network_receive_util,\
+    failed_task_rate_G,\
+    global_pipeline_utility_G,\
+    global_operator_utility_G,\
+    # Delay Tree\
+    D_k, A_k, H_k, GD_k,\
+    rho_H_A, SLO_deadline_k\
+}\
 
 ---
 
