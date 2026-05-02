@@ -2,7 +2,7 @@
 train.py — Phase 2 Logistics Hold-or-Not-Hold RL Training
 ==========================================================
 
-Trains and evaluates A2C, DQN, and AC on the LogisticsEnv.
+Trains and evaluates A2C, DQN, AC, and DDPG on the LogisticsEnv.
 Produces logistics-specific metrics and plots analogous to Phase 1 figures.
 
 Usage:
@@ -27,6 +27,7 @@ from simulator.multi_hub_env import MultiHubLogisticsEnv
 from agents.a2c import A2CAgent
 from agents.dqn import DQNAgent
 from agents.ac  import ACAgent
+from agents.ddpg import DDPGAgent
 
 RESULTS_DIR = os.path.join(_HERE, "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -48,12 +49,13 @@ ALGO_COLORS = {
     "a2c":          "#1f77b4",
     "dqn":          "#ff7f0e",
     "ac":           "#2ca02c",
+    "ddpg":         "#d62728",
     "no_hold":      "#7f7f7f",
     "heuristic_15": "#bcbd22",
     "heuristic_30": "#17becf",
 }
 DISPLAY = {
-    "a2c": "A2C", "dqn": "DQN", "ac": "AC",
+    "a2c": "A2C", "dqn": "DQN", "ac": "AC", "ddpg": "DDPG",
     "no_hold": "No Hold", "heuristic_15": "Heur.15", "heuristic_30": "Heur.30",
 }
 
@@ -91,6 +93,15 @@ def build_agent(algo: str, cfg: dict, state_dim: int = 34):
     if algo == "a2c": return A2CAgent(**kw)
     if algo == "dqn": return DQNAgent(**kw)
     if algo == "ac":  return ACAgent(**kw)
+    if algo == "ddpg":
+        return DDPGAgent(
+            state_dim=state_dim,
+            lr_actor=cfg["lr"],
+            lr_critic=cfg["lr"],
+            gamma=cfg["gamma"],
+            batch_size=cfg["batch_size"],
+            seed=cfg["seed"],
+        )
     raise ValueError(f"Unknown algo: {algo}")
 
 
@@ -110,7 +121,7 @@ def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
 
         while True:
             # Select action
-            if algo == "dqn":
+            if algo in ("dqn", "ddpg"):
                 action = agent.select_action(obs)
                 val    = None
             else:
@@ -121,7 +132,7 @@ def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
             done = terminated or truncated
 
             # Learn
-            if algo == "dqn":
+            if algo in ("dqn", "ddpg"):
                 agent.push(obs, action, reward, obs2, done)
                 agent.update()
             else:   # a2c, ac
@@ -231,7 +242,7 @@ def smooth(x, w=200):
 
 def plot_fig6(results: dict, save: str):
     """Missed transfers + Transfer success rate (analog of paper Figure 6)."""
-    order   = ["a2c", "dqn", "ac", "heuristic_30", "heuristic_15", "no_hold"]
+    order   = ["a2c", "dqn", "ac", "ddpg", "heuristic_30", "heuristic_15", "no_hold"]
     methods = [m for m in order if m in results]
     missed  = [results[m].get("missed_transfers", 0) for m in methods]
     miss_r  = [results[m].get("missed_rate", 0) * 100 for m in methods]
@@ -261,7 +272,7 @@ def plot_fig6(results: dict, save: str):
 
 def plot_fig6b(results: dict, save: str):
     """Bay utilization + departure delay (Phase 2 specific)."""
-    order   = ["a2c", "dqn", "ac", "heuristic_30", "heuristic_15", "no_hold"]
+    order   = ["a2c", "dqn", "ac", "ddpg", "heuristic_30", "heuristic_15", "no_hold"]
     methods = [m for m in order if m in results]
     labels  = [DISPLAY.get(m, m) for m in methods]
     bay_u   = [results[m].get("mean_bay_utilization", 0) * 100 for m in methods]
@@ -363,7 +374,7 @@ def plot_fig8(cfg: dict, save: str, multi_hub: bool):
 
 # ── Results Table ──────────────────────────────────────────────────────────────
 def print_table(all_results: dict):
-    order   = ["no_hold", "heuristic_15", "heuristic_30", "a2c", "dqn", "ac"]
+    order   = ["no_hold", "heuristic_15", "heuristic_30", "a2c", "dqn", "ac", "ddpg"]
     methods = [m for m in order if m in all_results]
 
     print("\n" + "=" * 88)
@@ -391,7 +402,7 @@ def print_table(all_results: dict):
     print("=" * 88)
     print(f"  {'Method':<8} {'Transfer Savings':>18} {'OTP Delta':>14}")
     print("  " + "-" * 44)
-    for algo in ["a2c", "dqn", "ac"]:
+    for algo in ["a2c", "dqn", "ac", "ddpg"]:
         if algo not in all_results: continue
         m     = all_results[algo].get("missed_transfers", nh_miss)
         otp   = all_results[algo].get("OTP", nh_otp)
@@ -406,7 +417,7 @@ def print_table(all_results: dict):
 def main():
     parser = argparse.ArgumentParser(description="Phase 2 Logistics HNH RL")
     parser.add_argument("--algo",      default="all",
-                        choices=["all", "a2c", "dqn", "ac"])
+                        choices=["all", "a2c", "dqn", "ac", "ddpg"])
     parser.add_argument("--episodes",  type=int, default=None)
     parser.add_argument("--no-plots",  action="store_true")
     parser.add_argument("--no-sweep",  action="store_true")
@@ -419,7 +430,7 @@ def main():
         cfg["n_train_episodes"] = args.episodes
         cfg["n_test_episodes"]  = max(1, args.episodes // 5)
 
-    algos = ["a2c", "dqn", "ac"] if args.algo == "all" else [args.algo]
+    algos = ["a2c", "dqn", "ac", "ddpg"] if args.algo == "all" else [args.algo]
     multi_hub = args.multi_hub
     state_dim = 42 if multi_hub else 34
 

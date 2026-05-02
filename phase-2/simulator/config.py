@@ -14,6 +14,9 @@ import os
 from dataclasses import dataclass, field
 from typing import List
 
+_SIM_DIR = os.path.dirname(os.path.abspath(__file__))
+_PHASE2_DIR = os.path.dirname(_SIM_DIR)
+
 
 @dataclass
 class SimConfig:
@@ -122,8 +125,8 @@ class SimConfig:
     """Fraction of cargo that is perishable (from CFS 2022: 17.4%)."""
 
     # ── Paths ─────────────────────────────────────────────────────────
-    data_dir: str = "phase-2/data"
-    calibrated_dir: str = "phase-2/simulator/calibrated"
+    data_dir: str = os.path.join(_PHASE2_DIR, "data")
+    calibrated_dir: str = os.path.join(_SIM_DIR, "calibrated")
 
     # ── Random seed ───────────────────────────────────────────────────
     seed: int = 42
@@ -149,6 +152,13 @@ class SimConfig:
     """
 
     def __post_init__(self):
+        # Keep paths stable regardless of current working directory.
+        if not os.path.isabs(self.data_dir):
+            self.data_dir = os.path.abspath(os.path.join(_PHASE2_DIR, self.data_dir))
+        if not os.path.isabs(self.calibrated_dir):
+            self.calibrated_dir = os.path.abspath(
+                os.path.join(_PHASE2_DIR, self.calibrated_dir)
+            )
         os.makedirs(self.calibrated_dir, exist_ok=True)
 
     @property
