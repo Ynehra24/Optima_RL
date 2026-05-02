@@ -172,13 +172,20 @@ At each decision epoch `t`, for outbound truck k:
 
 s_t = {\
     CL(τ), OL(τ), τ*,        # Local forecast + optimal action\
+    
     Vk, Qk, Xk, Ek,          # Cargo characteristics\
+
     Δin, Δslack,             # Timing dynamics\
+    
     Lk, Fk, Nin,             # Operational constraints\
+    
     CG, OG,                  # Global utility (24h)\
+    
     BG, WG, YG, ZG,          # Hub congestion metrics\
+    
     Dk, Ak,                  # Delay variables\
-    Gk_bay, Gk_road          # Delay decomposition\
+    
+    Gk_bay, Gk_road          # Delay decomposition\ 
 }
 
 ---
