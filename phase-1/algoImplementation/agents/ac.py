@@ -31,7 +31,7 @@ class ACAgent:
         lr:           float = 0.001,
         gamma:        float = 0.8,
         batch_size:   int   = 32,
-        entropy_coef: float = 0.01,
+        entropy_coef: float = 0.10,   # raised from 0.01 — was critical cause of immediate collapse
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):

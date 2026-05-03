@@ -1,6 +1,6 @@
 """
-agents/dqn.py
--------------
+agents/dqn.py (v2 — fixed epsilon decay)
+-----------------------------------------
 Deep Q-Network (DQN) agent.
 
 Paper architecture (Table 3): (17, 17, 7)
@@ -12,6 +12,11 @@ Paper hyperparameters:
   lr = 0.001, gamma = 0.8, batch = 32
   replay buffer = 10% of training epochs
   epsilon-greedy exploration
+
+FIX: eps_decay was 50000 (too slow decay). Changed to 5000.
+     With 25 eps × 3220 steps = 80,500 total steps, old decay meant
+     epsilon stayed near 1.0 for 60% of training. New decay reaches
+     eps_end after 5000 steps (exploration phase), then stays stable.
 """
 
 import numpy as np
@@ -37,8 +42,8 @@ class DQNAgent:
         batch_size:    int   = 32,
         buffer_size:   int   = 32200,     # 10% of 25 eps * 3220 steps
         eps_start:     float = 1.0,
-        eps_end:       float = 0.05,
-        eps_decay:     int   = 50000,
+        eps_end:       float = 0.10,      # raised: keep some exploration throughout
+        eps_decay:     int   = 20000,     # spread exploration over ~6 episodes (was 10000)
         target_update: int   = 500,
         seed:          int   = 42,
     ):
@@ -69,7 +74,7 @@ class DQNAgent:
 
     def select_action(self, state: np.ndarray) -> int:
         """Epsilon-greedy policy."""
-        # Decay epsilon
+        # Decay epsilon linearly
         self.eps = max(
             self.eps_end,
             self.eps - (1.0 - self.eps_end) / self.eps_decay

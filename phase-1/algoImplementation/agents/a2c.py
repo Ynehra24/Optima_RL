@@ -1,5 +1,5 @@
 """
-agents/a2c.py  (v2 — fixed for real simulator)
+agents/a2c.py  (v3 — fixed greedy_action for evaluation)
 """
 
 import numpy as np
@@ -42,7 +42,7 @@ class A2CAgent:
         lr:           float = 0.0001,
         gamma:        float = 0.8,
         batch_size:   int   = 32,
-        entropy_coef: float = 0.05,
+        entropy_coef: float = 0.10,   # raised from 0.05 — prevents early collapse to τ=0
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):
@@ -79,19 +79,14 @@ class A2CAgent:
 
     def greedy_action(self, state: np.ndarray) -> int:
         """
-        Confident greedy — used during evaluation.
-        Only hold if agent assigns >30% probability to that hold action.
-        Prevents 100%-hold collapse from pure argmax on a weak policy.
+        Greedy action selection — used during evaluation.
+        Simply returns argmax of policy probabilities.
+        FIX: Removed the 30% confidence threshold that was breaking evaluation.
         """
         probs, _ = self.network.forward(state)
         probs     = np.clip(probs, 1e-8, 1.0)
         probs    /= probs.sum()
-        best      = int(np.argmax(probs))
-        if best == 0:
-            return 0
-        if probs[best] >= 0.30:
-            return best
-        return 0
+        return int(np.argmax(probs))
 
     def store(self, state, action, reward, value, done):
         self._states.append(state.copy())
