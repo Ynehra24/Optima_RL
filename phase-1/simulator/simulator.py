@@ -251,6 +251,8 @@ class AirlineNetworkSimulator:
         fid = self._pending_hnh_flight
         fs = self.flights[fid]
 
+        # print(f"STEP: Flight {fid} | action={action} | hold_minutes={hold_minutes}")  # ← DEBUG
+
         # Apply hold
         fs.hold_delay = float(hold_minutes)
         fs.hnh_decided = True
@@ -352,6 +354,8 @@ class AirlineNetworkSimulator:
     def _handle_departure(self, event: SimEvent) -> Optional[List[SimEvent]]:
         fid = event.flight_id
         fs = self.flights[fid]
+
+        # print(f"[HANDLE_DEP] Flight {fid} | fs.hold_delay={fs.hold_delay}")  # ← DEBUG
 
         if fs.status != FlightStatus.SCHEDULED:
             return None
@@ -604,7 +608,7 @@ class AirlineNetworkSimulator:
         done = False
         while not done:
             action = self._select_baseline_action(policy, max_hold)
-            ctx, reward, done, info = self.step(action)
+            ctx, reward, done, info = self.step(action)  # FIX: was 'env.step(action)', now 'self.step(action)'
         return self.metrics.summary()
 
     def _select_baseline_action(self, policy: str, max_hold: int = 15) -> int:
@@ -625,6 +629,7 @@ class AirlineNetworkSimulator:
 
             # PAX whose second leg is this flight (trying to connect IN)
             connecting_pax_ids = self._incoming_pax.get(fid, [])
+            # print(f"DEBUG: Flight {fid} | Incoming PAX IDs: {len(connecting_pax_ids)} | sample={connecting_pax_ids[:3] if connecting_pax_ids else []}")
             if not connecting_pax_ids:
                 return 0  # No connecting PAX → no reason to hold
 
@@ -663,14 +668,17 @@ class AirlineNetworkSimulator:
 
                 # Connection window = outbound departure − inbound arrival
                 window = est_dep - inbound_arr
+                # print(f"  PAX {pax_id}: inbound={inbound_fid}, est_arr={inbound_arr:.1f}, est_dep={est_dep:.1f}, window={window:.1f}, mct={mct}")
                 if window >= mct:
                     continue  # PAX will make it without a hold
 
                 # PAX will miss — compute extra hold needed
                 needed = mct - window
+                # print(f"    → PAX WILL MISS! needed_hold={needed:.1f}")
                 if needed <= max_hold:
                     max_needed_hold = max(max_needed_hold, needed)
 
+            # print(f"  → max_needed_hold={max_needed_hold:.1f}, returning action for {max_needed_hold:.1f} min")
             if max_needed_hold <= 0:
                 return 0  # All PAX will make it (or need > max_hold)
 
