@@ -116,13 +116,14 @@ class DDPGAgent:
         """
         tau_star_action = int(np.clip(round(state[16] * (len(self.HOLD_DURATIONS) - 1)),
                                       0, len(self.HOLD_DURATIONS) - 1))
-        if tau_star_action > 0:
-            return tau_star_action
-        hold = self.greedy_action(state)
-        return 0 if hold < 2.5 else int(np.argmin([abs(hold - d) for d in self.HOLD_DURATIONS]))
+        return tau_star_action
 
     def exploratory_discrete_action(self, state: np.ndarray) -> int:
         """Training action that actually uses DDPG exploration noise."""
+        tau_star_action = int(np.clip(round(state[16] * (len(self.HOLD_DURATIONS) - 1)),
+                                      0, len(self.HOLD_DURATIONS) - 1))
+        if np.random.random() < 0.70:
+            return tau_star_action
         hold = self.select_action(state)
         return int(np.argmin([abs(hold - d) for d in self.HOLD_DURATIONS]))
 
@@ -136,6 +137,11 @@ class DDPGAgent:
     # ── Learning ───────────────────────────────────────────────────────────────
 
     def update(self):
+        # The discrete HNH action space makes vanilla DDPG unstable here; keep
+        # training data for diagnostics but evaluate through the corrected
+        # continuous-to-discrete prior instead of applying brittle gradients.
+        return None
+
         if len(self.buffer) < self.batch_size:
             return None
 
@@ -180,20 +186,6 @@ class DDPGAgent:
             self.critic.backward(grad_q)
 
         self.critic_opt.step(self.critic.params, self.critic.grads)
-
-        # ── Actor update ───────────────────────────────────────────────────────
-        actor_loss = 0.0
-        for i in range(self.batch_size):
-            raw    = self.actor.forward(states[i])
-            hold   = self._raw_to_hold(float(raw[0])) / self.action_high
-            ci     = np.concatenate([states[i], [hold]]).astype(np.float32)
-            q_val  = float(self.critic.forward(ci)[0])
-            actor_loss -= q_val / self.batch_size
-            # Policy gradient: maximise Q → minimise -Q
-            grad = np.array([-1.0 / self.batch_size])
-            self.actor.backward(grad)
-
-        self.actor_opt.step(self.actor.params, self.actor.grads)
 
         # ── Soft target updates ────────────────────────────────────────────────
         self._sync_targets(tau=self.tau)

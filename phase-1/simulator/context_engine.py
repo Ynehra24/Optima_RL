@@ -268,6 +268,8 @@ class ContextEngine:
                 + hold_tau
             )
             connection_window = outbound_est_dep - inbound_est_arrival
+            if hold_tau > 0:
+                mct = mct - self.cfg.protected_connection_mct_reduction
             if connection_window >= mct:
                 return max(0, outbound_flight.total_arrival_delay + 0.35 * hold_tau)
             return 120.0

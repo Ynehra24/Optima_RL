@@ -495,6 +495,8 @@ class AirlineNetworkSimulator:
         dest_airport = arr_fs.flight.destination
         apt = self.airports.get(dest_airport)
         mct = apt.mct if apt else self.cfg.mct_default
+        if conn_fs.hold_delay > 0:
+            mct = mct - self.cfg.protected_connection_mct_reduction
         connection_window = conn_departure - actual_arrival
 
         day = int(actual_arrival // 1440)

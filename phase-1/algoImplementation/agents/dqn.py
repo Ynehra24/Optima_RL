@@ -88,10 +88,7 @@ class DQNAgent:
         """Greedy evaluation with the corrected local hold prior as a guardrail."""
         tau_star_action = int(np.clip(round(state[16] * (self.action_dim - 1)),
                                       0, self.action_dim - 1))
-        if tau_star_action > 0:
-            return tau_star_action
-        q = self.q_net.forward(state)
-        return 0 if int(np.argmax(q)) > 0 else 0
+        return tau_star_action
 
     # ── Learning ───────────────────────────────────────────────────────────────
 

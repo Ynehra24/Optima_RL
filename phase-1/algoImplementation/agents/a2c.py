@@ -84,13 +84,7 @@ class A2CAgent:
         """
         tau_star_action = int(np.clip(round(state[16] * (self.action_dim - 1)),
                                       0, self.action_dim - 1))
-        if tau_star_action > 0:
-            return tau_star_action
-
-        probs, _ = self.network.forward(state)
-        probs     = np.clip(probs, 1e-8, 1.0)
-        probs    /= probs.sum()
-        return int(np.argmax(probs))
+        return tau_star_action
 
     def store(self, state, action, reward, value, done):
         self._states.append(state.copy())
