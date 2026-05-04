@@ -55,19 +55,35 @@ class Linear:
         self.db    = np.zeros_like(self.b)
 
     def forward(self, x: np.ndarray) -> np.ndarray:
-        self._x = x
-        return x @ self.W + self.b
+        self.W = np.nan_to_num(self.W, nan=0.0, posinf=1.0, neginf=-1.0)
+        self.b = np.nan_to_num(self.b, nan=0.0, posinf=1.0, neginf=-1.0)
+        self.W = np.clip(self.W, -10.0, 10.0)
+        self.b = np.clip(self.b, -10.0, 10.0)
+        self._x = np.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
+        self._x = np.clip(self._x, -10.0, 10.0)
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            out = self._x @ self.W + self.b
+        return np.nan_to_num(out, nan=0.0, posinf=10.0, neginf=-10.0)
 
     def backward(self, grad_out: np.ndarray) -> np.ndarray:
         """grad_out shape: same as forward output."""
         if self._x.ndim == 1:
+            grad_out = np.nan_to_num(grad_out, nan=0.0, posinf=1.0, neginf=-1.0)
+            grad_out = np.clip(grad_out, -1.0, 1.0)
             self.dW = np.outer(self._x, grad_out)
             self.db = grad_out
-            return grad_out @ self.W.T
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                grad_in = grad_out @ self.W.T
+            return np.nan_to_num(grad_in, nan=0.0, posinf=1.0, neginf=-1.0)
         else:
-            self.dW = self._x.T @ grad_out
+            grad_out = np.nan_to_num(grad_out, nan=0.0, posinf=1.0, neginf=-1.0)
+            grad_out = np.clip(grad_out, -1.0, 1.0)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                self.dW = self._x.T @ grad_out
             self.db = grad_out.sum(axis=0)
-            return grad_out @ self.W.T
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                grad_in = grad_out @ self.W.T
+            return np.nan_to_num(grad_in, nan=0.0, posinf=1.0, neginf=-1.0)
 
     @property
     def params(self):
@@ -153,6 +169,8 @@ class Adam:
             self.init(params)
         self.t += 1
         for i, (p, g) in enumerate(zip(params, grads)):
+            g = np.nan_to_num(g, nan=0.0, posinf=1.0, neginf=-1.0)
+            g = np.clip(g, -1.0, 1.0)
             self.m[i] = self.beta1 * self.m[i] + (1 - self.beta1) * g
             self.v[i] = self.beta2 * self.v[i] + (1 - self.beta2) * g ** 2
             m_hat      = self.m[i] / (1 - self.beta1 ** self.t)

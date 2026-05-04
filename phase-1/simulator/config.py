@@ -120,7 +120,7 @@ class SimConfig:
     # Realistic MCTs: domestic hub ~25 min, spoke ~35 min
     mct_default: int = 35              # default MCT at spoke airports
     mct_hub: int = 25                  # MCT at hubs (lower, better infrastructure)
-    protected_connection_mct_reduction: float = 20.0
+    protected_connection_mct_reduction: float = 40.0
 
     # --- Reward / utility normalisation (used by context engine) ---
     delta_p: float = 240.0             # PAX delay cap (minutes) for PU normalisation
