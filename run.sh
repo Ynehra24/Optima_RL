@@ -29,6 +29,21 @@ fail() { echo -e "${RED}[✘]${RESET} $*"; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"   # All paths below are relative to the repo root
 
+# ── Parse command-line arguments ──────────────────────────────────────────────
+EPISODES=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --episodes)
+            EPISODES="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
 VENV_DIR="./venv"
 RESULTS_ROOT="./results"
 LOGS_DIR="$RESULTS_ROOT/logs"
@@ -99,11 +114,18 @@ PHASE1_TRAIN="./phase-1/algoImplementation/train.py"
 PHASE1_RESULTS="./phase-1/algoImplementation/results"
 mkdir -p "$PHASE1_RESULTS"
 
-log "Training all agents (A2C, DQN, AC, DDPG) — default 25 episodes each..."
-
-python "$PHASE1_TRAIN" \
-    --algo all \
-    2>&1 | tee "$LOGS_DIR/phase1_training.log"
+if [ -n "$EPISODES" ]; then
+    log "Training all agents (A2C, DQN, AC, DDPG) — $EPISODES episodes each..."
+    python "$PHASE1_TRAIN" \
+        --algo all \
+        --episodes "$EPISODES" \
+        2>&1 | tee "$LOGS_DIR/phase1_training.log"
+else
+    log "Training all agents (A2C, DQN, AC, DDPG) — default 25 episodes each..."
+    python "$PHASE1_TRAIN" \
+        --algo all \
+        2>&1 | tee "$LOGS_DIR/phase1_training.log"
+fi
 
 ok "Phase 1 training complete."
 log "Phase 1 output files:"
@@ -126,12 +148,20 @@ PHASE2_TRAIN="./phase-2/algoImplementation/train.py"
 PHASE2_RESULTS="./phase-2/algoImplementation/results"
 mkdir -p "$PHASE2_RESULTS"
 
-log "Training all agents (A2C, DQN, AC, DDPG) — default 25 episodes, multi-hub mode..."
-
-python "$PHASE2_TRAIN" \
-    --algo all \
-    --multi-hub \
-    2>&1 | tee "$LOGS_DIR/phase2_training.log"
+if [ -n "$EPISODES" ]; then
+    log "Training all agents (A2C, DQN, AC, DDPG) — $EPISODES episodes, multi-hub mode..."
+    python "$PHASE2_TRAIN" \
+        --algo all \
+        --multi-hub \
+        --episodes "$EPISODES" \
+        2>&1 | tee "$LOGS_DIR/phase2_training.log"
+else
+    log "Training all agents (A2C, DQN, AC, DDPG) — default 25 episodes, multi-hub mode..."
+    python "$PHASE2_TRAIN" \
+        --algo all \
+        --multi-hub \
+        2>&1 | tee "$LOGS_DIR/phase2_training.log"
+fi
 
 ok "Phase 2 training complete."
 log "Phase 2 output files:"
@@ -158,13 +188,22 @@ mkdir -p "$PHASE3_RESULTS" "$PHASE3_LOGS"
 
 RUN_NAME="eval_run"
 
-log "Training all agents (A2C, DQN, AC, DDPG) — standard preset (30 episodes)..."
-
-python "$PHASE3_TRAIN" \
-    --algo all \
-    --preset standard \
-    --run-name "$RUN_NAME" \
-    2>&1 | tee "$LOGS_DIR/phase3_training.log"
+if [ -n "$EPISODES" ]; then
+    log "Training all agents (A2C, DQN, AC, DDPG) — $EPISODES episodes (standard preset)..."
+    python "$PHASE3_TRAIN" \
+        --algo all \
+        --preset standard \
+        --run-name "$RUN_NAME" \
+        --episodes "$EPISODES" \
+        2>&1 | tee "$LOGS_DIR/phase3_training.log"
+else
+    log "Training all agents (A2C, DQN, AC, DDPG) — standard preset (30 episodes)..."
+    python "$PHASE3_TRAIN" \
+        --algo all \
+        --preset standard \
+        --run-name "$RUN_NAME" \
+        2>&1 | tee "$LOGS_DIR/phase3_training.log"
+fi
 
 ok "Phase 3 training complete."
 

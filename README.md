@@ -143,6 +143,33 @@ bash run.sh
 
 ---
 
+### Optional: Custom Episode Count
+
+To override the default episode counts, pass the `--episodes` flag:
+
+```bash
+bash run.sh --episodes 50
+```
+
+| Argument       | Default                                     | Effect                                                             |
+| -------------- | ------------------------------------------- | ------------------------------------------------------------------ |
+| `--episodes N` | _Phase 1_: 25, _Phase 2_: 25, _Phase 3_: 30 | Trains all three phases for `N` episodes each (overrides defaults) |
+
+**Examples:**
+
+```bash
+# Train with 10 episodes (quick test run)
+bash run.sh --episodes 10
+
+# Train with 100 episodes (extended run)
+bash run.sh --episodes 100
+
+# Use defaults (no flag needed)
+bash run.sh
+```
+
+---
+
 ### What `run.sh` Does
 
 | Step | Action                                                                                        |
