@@ -59,9 +59,11 @@ class EpisodeStats:
     n_rewards: int = 0
     n_on_time_departures: int = 0   # departed within OTP_THRESHOLD of schedule
     n_total_departures: int = 0
+    n_sla_compliant: int = 0        # departed within SLA_THRESHOLD of schedule
     bay_utilization_samples: List[float] = field(default_factory=list)
 
-    OTP_THRESHOLD: float = 15.0  # minutes (standard logistics on-time window)
+    OTP_THRESHOLD: float = 15.0  # minutes (legacy from Phase 1, too strict for multi-hub)
+    SLA_THRESHOLD: float = 45.0  # minutes (logistics-appropriate for cascading network)
 
     @property
     def missed_transfer_rate(self) -> float:
@@ -70,9 +72,25 @@ class EpisodeStats:
 
     @property
     def OTP(self) -> float:
-        """On-Time Departure Rate: % trucks departing within 15 min of schedule."""
+        """On-Time Departure Rate: % trucks departing within 15 min of schedule.
+        NOTE: This is kept for backward compatibility but is misleading for
+        multi-hub logistics. Use SLA_compliance instead.
+        """
         return (self.n_on_time_departures / self.n_total_departures * 100.0
                 if self.n_total_departures > 0 else 100.0)
+
+    @property
+    def SLA_compliance(self) -> float:
+        """SLA Compliance: % trucks departing within 45 min of schedule.
+        Domain-appropriate metric for multi-hub cascading freight networks.
+        """
+        return (self.n_sla_compliant / self.n_total_departures * 100.0
+                if self.n_total_departures > 0 else 100.0)
+
+    @property
+    def throughput(self) -> int:
+        """Total successful cargo transfers — the primary logistics KPI."""
+        return self.n_transfers_success
 
     @property
     def mean_reward(self) -> float:
@@ -559,6 +577,8 @@ class EventQueue:
         self.stats.n_total_departures += 1
         if dep_delay <= self.stats.OTP_THRESHOLD:
             self.stats.n_on_time_departures += 1
+        if dep_delay <= self.stats.SLA_THRESHOLD:
+            self.stats.n_sla_compliant += 1
 
         # Record outcome for global rolling stats
         self.ctx_engine.record_outcome(

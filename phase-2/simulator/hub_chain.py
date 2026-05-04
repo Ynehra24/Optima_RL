@@ -343,6 +343,7 @@ class HubChain:
             combined.n_rewards             += s.n_rewards
             combined.n_on_time_departures  += s.n_on_time_departures
             combined.n_total_departures    += s.n_total_departures
+            combined.n_sla_compliant       += s.n_sla_compliant
             combined.bay_utilization_samples.extend(s.bay_utilization_samples)
         return combined
 

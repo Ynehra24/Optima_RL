@@ -241,12 +241,12 @@ for m in methods:
 import json
 d = json.load(open('$RESULTS_ROOT/phase2/summary.json'))
 methods = ['no_hold','heuristic_15','heuristic_30','a2c','dqn','ac','ddpg']
-print(f\"  {'Method':<14} {'Miss Rate':>10} {'OTP%':>7} {'Holds%':>7}\")
+print(f\"  {'Method':<14} {'Miss Rate':>10} {'SLA%':>7} {'Holds%':>7}\")
 print('  ' + '-'*43)
 for m in methods:
     if m not in d: continue
     r = d[m]
-    print(f\"  {m:<14} {r.get('missed_rate',0):>9.2%} {r.get('OTP',0):>7.1f}% {r.get('holds_pct',0):>6.1f}%\")
+    print(f\"  {m:<14} {r.get('missed_rate',0):>9.2%} {r.get('SLA_compliance',0):>7.1f}% {r.get('holds_pct',0):>6.1f}%\")
 " 2>/dev/null || echo "  (see phase2/summary.json)"
     fi
     echo ""

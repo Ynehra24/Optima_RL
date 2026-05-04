@@ -135,6 +135,7 @@ class MultiHubLogisticsEnv(gym.Env):
         eq = self.chain.event_queues[hub_id]
         global_reward = eq.get_global_reward(truck_id)
         total_reward = self.cfg.beta * local_reward + (1 - self.cfg.beta) * global_reward
+        total_reward = float(max(-1.0, min(1.0, total_reward)))  # clip to [-1, 1]
 
         self._episode_rewards.append(total_reward)
         self._total_steps += 1
@@ -197,7 +198,7 @@ class MultiHubLogisticsEnv(gym.Env):
         per_hub = {
             hub_id: {
                 "missed_rate": self.chain.event_queues[hub_id].stats.missed_transfer_rate,
-                "OTP":         self.chain.event_queues[hub_id].stats.OTP,
+                "SLA":         self.chain.event_queues[hub_id].stats.SLA_compliance,
             }
             for hub_id in self.chain.hub_ids
         }
@@ -208,7 +209,8 @@ class MultiHubLogisticsEnv(gym.Env):
             "truck_id":             self._current_truck_id,
             "hold_minutes":         self._last_hold_minutes,
             "missed_transfer_rate": stats.missed_transfer_rate,
-            "OTP":                  stats.OTP,
+            "SLA_compliance":       stats.SLA_compliance,
+            "throughput":           stats.throughput,
             "n_transfers_missed":   stats.n_transfers_missed,
             "n_transfers_success":  stats.n_transfers_success,
             "mean_bay_utilization": stats.mean_bay_utilization,
