@@ -16,6 +16,12 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+# ── Windows UTF-8 fix (avoids UnicodeEncodeError on cp1252 terminals) ──────────
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -32,18 +38,28 @@ from agents.ddpg import DDPGAgent
 RESULTS_DIR = os.path.join(_HERE, "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# ── Hyperparameters (paper §6.2 values) ───────────────────────────────────────
+# ── Hyperparameters (tuned for Phase 2 multi-hub — mirrors Phase 3 settings) ──
 DEFAULT_CONFIG = {
     "n_train_episodes": 25,
     "n_test_episodes":  5,
-    "lr":               0.0001,
-    "gamma":            0.8,
+    "lr":               0.0003,  # was 0.0001; Phase 3 uses 0.0003
+    "gamma":            0.9,     # was 0.8; multi-hub cascading needs longer horizon
     "batch_size":       32,
-    "alpha":            0.50,   # 0.5 = equal weight cargo vs punctuality (was 0.75)
+    "alpha":            0.50,    # 0.5 = equal weight cargo vs punctuality
     "beta":             0.75,
     "log_every":        200,
     "seed":             42,
 }
+
+
+def sanitize_state(s: np.ndarray) -> np.ndarray:
+    """Clip and clean state vector to prevent NaN/inf poisoning.
+
+    Phase 3 has this; Phase 2 was missing it. Without this, a single
+    NaN from the simulator poisons all network weights permanently.
+    """
+    s = np.nan_to_num(s, nan=0.0, posinf=5.0, neginf=-5.0)
+    return np.clip(s, -5.0, 5.0).astype(np.float32)
 
 ALGO_COLORS = {
     "a2c":          "#1f77b4",
@@ -117,6 +133,7 @@ def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
 
     for ep in range(n_eps):
         obs, info = env.reset()
+        obs = sanitize_state(obs)   # FIX: prevent NaN poisoning
         epr = eps = 0
 
         while True:
@@ -129,6 +146,7 @@ def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
 
             # Step
             obs2, reward, terminated, truncated, info = env.step(action)
+            obs2 = sanitize_state(obs2)   # FIX: prevent NaN poisoning
             done = terminated or truncated
 
             # Learn
@@ -152,7 +170,7 @@ def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
                       f"AvgR(200): {m['avg_reward_1k']:.4f} | "
                       f"Loss: {m['avg_loss_1k']:.4f} | "
                       f"MissRate: {stats.missed_transfer_rate:.2%} | "
-                      f"BayUtil: {stats.mean_bay_utilization:.2%} | "
+                      f"SLA: {stats.SLA_compliance:.1f}% | "
                       f"Time: {time.time()-t0:.0f}s")
 
             if done:
@@ -165,7 +183,7 @@ def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
               f"MeanRwd: {mean:.4f} | "
               f"Missed: {stats.n_transfers_missed} | "
               f"MissRate: {stats.missed_transfer_rate:.2%} | "
-              f"OTP: {stats.OTP:.1f}%")
+              f"SLA: {stats.SLA_compliance:.1f}%")
 
     print(f"\n  {algo.upper()} training complete in {time.time()-t0:.1f}s")
     return {
@@ -180,12 +198,14 @@ def train(agent, env: LogisticsEnv, n_eps: int, algo: str, cfg: dict) -> dict:
 def _run_one_episode(env: LogisticsEnv, action_fn) -> dict:
     """Run one full episode with a fixed policy. Returns episode metrics."""
     obs, _ = env.reset()
+    obs = sanitize_state(obs)   # FIX: prevent NaN poisoning
     rewards = []
     holds = steps = 0
 
     while True:
         action = action_fn(obs)
         obs, reward, terminated, truncated, info = env.step(action)
+        obs = sanitize_state(obs)
         done = terminated or truncated
         rewards.append(reward)
         steps += 1
@@ -199,8 +219,9 @@ def _run_one_episode(env: LogisticsEnv, action_fn) -> dict:
         "avg_reward":           float(np.mean(rewards)),
         "missed_transfers":     stats.n_transfers_missed,
         "transfer_success":     stats.n_transfers_success,
+        "throughput":           stats.throughput,
         "missed_rate":          stats.missed_transfer_rate,
-        "OTP":                  stats.OTP,
+        "SLA_compliance":       stats.SLA_compliance,
         "mean_bay_utilization": stats.mean_bay_utilization,
         "mean_departure_delay": stats.total_departure_delay / max(stats.n_total_departures, 1),
         "holds_pct":            100.0 * holds / max(steps, 1),
@@ -215,22 +236,32 @@ def _aggregate(results: list, name: str) -> dict:
         except: out[k] = results[0][k]
     print(f"  {DISPLAY.get(name, name.upper()):<14} | "
           f"MissRate: {out.get('missed_rate', 0):5.2%}  | "
-          f"OTP: {out.get('OTP', 0):5.1f}%  | "
-          f"Missed: {out.get('missed_transfers', 0):6.0f}  | "
+          f"SLA: {out.get('SLA_compliance', 0):5.1f}%  | "
+          f"Thru: {out.get('throughput', 0):6.0f}  | "
           f"BayUtil: {out.get('mean_bay_utilization', 0):5.2%}  | "
           f"Holds: {out.get('holds_pct', 0):5.1f}%")
     return out
 
 
-def evaluate_agent(agent, env: LogisticsEnv, n_eps: int, algo: str) -> dict:
+def evaluate_agent(agent, env_factory, n_eps: int, algo: str, multi_hub: bool, alpha: float) -> dict:
+    """Evaluate an RL agent with fresh env per episode (like Phase 3)."""
     print(f"\n  Evaluating {DISPLAY.get(algo, algo)} ({n_eps} episodes)...")
     fn = lambda s: agent.greedy_action(s)
-    return _aggregate([_run_one_episode(env, fn) for _ in range(n_eps)], algo)
+    results = []
+    for i in range(n_eps):
+        env = build_env(seed=500 + i, alpha=alpha, multi_hub=multi_hub)
+        results.append(_run_one_episode(env, fn))
+    return _aggregate(results, algo)
 
 
-def evaluate_baseline(policy_fn, env: LogisticsEnv, n_eps: int, name: str) -> dict:
+def evaluate_baseline(policy_fn, n_eps: int, name: str, multi_hub: bool, alpha: float) -> dict:
+    """Evaluate a baseline with fresh env per episode (like Phase 3)."""
     print(f"  Evaluating baseline: {name}...")
-    return _aggregate([_run_one_episode(env, policy_fn) for _ in range(n_eps)], name)
+    results = []
+    for i in range(n_eps):
+        env = build_env(seed=700 + i, alpha=alpha, multi_hub=multi_hub)
+        results.append(_run_one_episode(env, policy_fn))
+    return _aggregate(results, name)
 
 
 # ── Plotting ───────────────────────────────────────────────────────────────────
@@ -380,37 +411,41 @@ def print_table(all_results: dict):
     print("\n" + "=" * 88)
     print("  RESULTS TABLE — Phase 2 Logistics HNH")
     print("=" * 88)
-    print(f"  {'Method':<14} {'MissRate':>10} {'OTP%':>7} {'Missed':>8} "
-          f"{'BayUtil':>9} {'DepDly':>8} {'Holds%':>7}")
+    print(f"  {'Method':<14} {'MissRate':>10} {'SLA%':>7} {'Missed':>8} "
+          f"{'Thruput':>9} {'DepDly':>8} {'Holds%':>7}")
     print("  " + "-" * 70)
     for m in methods:
         r = all_results[m]
         print(f"  {DISPLAY.get(m, m):<14} "
               f"{r.get('missed_rate', 0):>9.2%} "
-              f"{r.get('OTP', 0):>7.1f}% "
+              f"{r.get('SLA_compliance', 0):>7.1f}% "
               f"{r.get('missed_transfers', 0):>8.0f} "
-              f"{r.get('mean_bay_utilization', 0):>8.2%} "
+              f"{r.get('throughput', 0):>9.0f} "
               f"{r.get('mean_departure_delay', 0):>7.2f}m "
               f"{r.get('holds_pct', 0):>6.1f}%")
 
     # Delta vs no_hold
     nh = all_results.get("no_hold", {})
     nh_miss = nh.get("missed_transfers", 1)
-    nh_otp  = nh.get("OTP", 0)
+    nh_sla  = nh.get("SLA_compliance", 0)
+    nh_thru = nh.get("throughput", 0)
     print("\n" + "=" * 88)
-    print("  SAVINGS vs No-Hold  (Transfer Savings ↑ better | OTP Delta ↑ better)")
+    print("  SAVINGS vs No-Hold  (Transfer Savings ↑ | SLA Delta ↑ | Throughput Δ ↑)")
     print("=" * 88)
-    print(f"  {'Method':<8} {'Transfer Savings':>18} {'OTP Delta':>14}")
-    print("  " + "-" * 44)
+    print(f"  {'Method':<8} {'Transfer Savings':>18} {'SLA Delta':>14} {'Thru Δ':>10}")
+    print("  " + "-" * 56)
     for algo in ["a2c", "dqn", "ac", "ddpg"]:
         if algo not in all_results: continue
         m     = all_results[algo].get("missed_transfers", nh_miss)
-        otp   = all_results[algo].get("OTP", nh_otp)
+        sla   = all_results[algo].get("SLA_compliance", nh_sla)
+        thru  = all_results[algo].get("throughput", nh_thru)
         pct   = (nh_miss - m) / max(nh_miss, 1) * 100
-        otpd  = otp - nh_otp
-        sign  = "+" if pct  > 0 else ""
-        osign = "+" if otpd > 0 else ""
-        print(f"  {DISPLAY[algo]:<8} {sign}{pct:>15.1f}%    {osign}{otpd:>8.1f} pp")
+        slad  = sla - nh_sla
+        thrud = thru - nh_thru
+        sign  = "+" if pct   > 0 else ""
+        ssign = "+" if slad  > 0 else ""
+        tsign = "+" if thrud > 0 else ""
+        print(f"  {DISPLAY[algo]:<8} {sign}{pct:>15.1f}%    {ssign}{slad:>8.1f} pp  {tsign}{thrud:>7.0f}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -436,14 +471,14 @@ def main():
 
     print("\n" + "=" * 60)
     print("  Phase 2 Logistics — Hold-or-Not-Hold RL")
-    print(f"  Mode        : {'10-Hub FAF5 Mesh CASCADE ✓' if multi_hub else 'Single-Hub'}")
+    print(f"  Mode        : {'10-Hub FAF5 Mesh CASCADE' if multi_hub else 'Single-Hub'}")
     print(f"  Algorithms  : {algos}")
     print(f"  State dim   : {state_dim}  |  Actions: 7  |  "
           f"Env: {'MultiHubLogisticsEnv' if multi_hub else 'LogisticsEnv'}")
     print(f"  Train eps   : {cfg['n_train_episodes']}  |  "
           f"Test eps: {cfg['n_test_episodes']}")
-    print(f"  α={cfg['alpha']}  β={cfg['beta']}  "
-          f"lr={cfg['lr']}  γ={cfg['gamma']}")
+    print(f"  alpha={cfg['alpha']}  beta={cfg['beta']}  "
+          f"lr={cfg['lr']}  gamma={cfg['gamma']}")
     print("=" * 60)
 
     # ── Train ──────────────────────────────────────────────────────────────────
@@ -467,8 +502,9 @@ def main():
     bl_results = {}
     for name, fn in [("no_hold", no_hold), ("heuristic_15", heur15),
                      ("heuristic_30", heur30)]:
-        env = build_env(seed=cfg["seed"] + 100, alpha=cfg["alpha"], multi_hub=multi_hub)
-        bl_results[name] = evaluate_baseline(fn, env, cfg["n_test_episodes"], name)
+        bl_results[name] = evaluate_baseline(
+            fn, cfg["n_test_episodes"], name,
+            multi_hub=multi_hub, alpha=cfg["alpha"])
 
     # ── Evaluate RL agents ─────────────────────────────────────────────────────
     print("\n" + "=" * 60)
@@ -476,9 +512,9 @@ def main():
     print("=" * 60)
     rl_results = {}
     for algo in algos:
-        env = build_env(seed=cfg["seed"] + 100, alpha=cfg["alpha"], multi_hub=multi_hub)
-        rl_results[algo] = evaluate_agent(agents[algo], env,
-                                          cfg["n_test_episodes"], algo)
+        rl_results[algo] = evaluate_agent(
+            agents[algo], None, cfg["n_test_episodes"], algo,
+            multi_hub=multi_hub, alpha=cfg["alpha"])
 
     all_results = {**bl_results, **rl_results}
     print_table(all_results)
@@ -506,7 +542,7 @@ def main():
         plot_fig7(train_results, algos,
                   os.path.join(RESULTS_DIR, "figure7_rl_metrics.png"))
         if not args.no_sweep:
-            plot_fig8(cfg, os.path.join(RESULTS_DIR, "figure8_tunability.png"))
+            plot_fig8(cfg, os.path.join(RESULTS_DIR, "figure8_tunability.png"), multi_hub)
 
     print("\n  All done. Results in ./results/")
 
