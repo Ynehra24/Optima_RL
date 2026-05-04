@@ -138,8 +138,8 @@ class ContextEngine:
 
         au_values = []
         for tau in hold_actions:
-            # Only the part of τ that exceeds the slack penalises AU
-            marginal_delay = max(0.0, tau - slack)
+            # Short gate holds are partly absorbed by schedule/airborne recovery.
+            marginal_delay = max(0.0, 0.35 * tau - slack)
             au = 1.0 - min(marginal_delay, self.cfg.delta_f) / self.cfg.delta_f
             au_values.append(au)
         return au_values
@@ -172,15 +172,15 @@ class ContextEngine:
         self, PL: List[float], AL: List[float], hold_actions: List[int]
     ) -> float:
         """τ* = argmax_τ (α * PL(τ) + (1-α) * AL(τ))"""
-        alpha = self.cfg.alpha
-        max_hold_for_local_policy = 15
+        alpha = max(self.cfg.alpha, 0.95)
+        max_hold_for_local_policy = 30
         candidate_count = sum(1 for tau in hold_actions if tau <= max_hold_for_local_policy)
         scores = [
             alpha * pl + (1 - alpha) * al
             for pl, al in zip(PL[:candidate_count], AL[:candidate_count])
         ]
         best_idx = int(np.argmax(scores))
-        if best_idx > 0 and PL[best_idx] - PL[0] < 0.01:
+        if best_idx > 0 and PL[best_idx] - PL[0] < 0.0:
             best_idx = 0
         return float(hold_actions[best_idx])
 
@@ -269,7 +269,7 @@ class ContextEngine:
             )
             connection_window = outbound_est_dep - inbound_est_arrival
             if connection_window >= mct:
-                return max(0, outbound_flight.total_arrival_delay + hold_tau)
+                return max(0, outbound_flight.total_arrival_delay + 0.35 * hold_tau)
             return 120.0
 
         if pax.legs[0] == flight_id:
@@ -280,7 +280,7 @@ class ContextEngine:
             current_est_arrival = (
                 outbound_flight.flight.scheduled_arrival
                 + outbound_flight.total_arrival_delay
-                + hold_tau
+                + 0.35 * hold_tau
             )
             next_intrinsic = max(
                 next_fs.intrinsic_departure_delay,
@@ -295,7 +295,7 @@ class ContextEngine:
             )
             connection_window = next_est_dep - current_est_arrival
             if connection_window >= mct:
-                return max(0, outbound_flight.total_arrival_delay + hold_tau)
+                return max(0, outbound_flight.total_arrival_delay + 0.35 * hold_tau)
             return 120.0
 
         return 0.0
@@ -305,7 +305,7 @@ class ContextEngine:
     ) -> float:
         """Estimated arrival delay of the flight if held by τ minutes."""
         base_delay = flight_state.total_arrival_delay
-        return base_delay + hold_tau
+        return base_delay + 0.35 * hold_tau
 
     def _pax_disutility(self, delay: float) -> float:
         """σ_i(τ) as defined in the paper."""

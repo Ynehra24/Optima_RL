@@ -85,8 +85,17 @@ class FlightState:
     @property
     def total_arrival_delay(self) -> float:
         """Total arrival delay."""
-        dep_delay = self.total_departure_delay
-        return dep_delay + self.airtime_delay + self.ground_arrival_delay
+        base_dep_delay = max(
+            self.intrinsic_departure_delay,
+            self.propagated_departure_delay,
+        ) + self.ground_departure_delay
+        recovered_hold_delay = 0.35 * self.hold_delay
+        return (
+            base_dep_delay
+            + recovered_hold_delay
+            + self.airtime_delay
+            + self.ground_arrival_delay
+        )
 
     @property
     def departure_delay_D(self) -> float:

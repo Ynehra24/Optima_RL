@@ -17,6 +17,7 @@ Key design principles from the paper:
 from __future__ import annotations
 
 from collections import defaultdict
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -166,6 +167,7 @@ class AirlineNetworkSimulator:
         if seed is not None:
             self.cfg.random_seed = seed
         self.rng = np.random.default_rng(self.cfg.random_seed)
+        random.seed(self.cfg.random_seed)
 
         self.event_engine.clear()
         self.context_engine.reset()
