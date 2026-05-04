@@ -127,7 +127,7 @@ def train(agent, env, n_eps, algo, cfg):
             elif algo in ("a2c", "ac"):
                 action, val = agent.select_action(state)
             else:
-                action = agent.discrete_action(state); val = None
+                action = agent.exploratory_discrete_action(state); val = None
 
             # ── Step — get IMMEDIATE local reward (r_l) ───────────────────
             ctx, r_l, done, info = env.step(action)
@@ -225,6 +225,12 @@ def train(agent, env, n_eps, algo, cfg):
             r_l = t['r_l']
             r_g = global_rewards.get(flight_id, 0.0)
             r_total = beta * r_l + (1 - beta) * r_g
+            hold_minutes = HOLD_ACTIONS[t['action']]
+            tau_star_minutes = float(t['state'][16]) * HOLD_ACTIONS[-1]
+            if hold_minutes > 0:
+                r_total -= 0.01 * hold_minutes
+            if tau_star_minutes > 0 and hold_minutes == tau_star_minutes:
+                r_total += 0.08
             
             all_rewards.append(r_total)
             all_r_g.append(r_g)

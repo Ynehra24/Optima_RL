@@ -32,6 +32,7 @@ class ACAgent:
         gamma:        float = 0.8,
         batch_size:   int   = 32,
         entropy_coef: float = 0.10,   # raised from 0.01 — was critical cause of immediate collapse
+        tau_star_coef: float = 0.50,
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):
@@ -40,6 +41,7 @@ class ACAgent:
         self.gamma        = gamma
         self.batch_size   = batch_size
         self.entropy_coef = entropy_coef
+        self.tau_star_coef = tau_star_coef
         self.value_coef   = value_coef
 
         # Paper arch: Actor (17, 34, 17, 7), Critic (17, 24, 17, 1)
@@ -71,6 +73,10 @@ class ACAgent:
         return action, value
 
     def greedy_action(self, state: np.ndarray) -> int:
+        tau_star_action = int(np.clip(round(state[16] * (self.action_dim - 1)),
+                                      0, self.action_dim - 1))
+        if tau_star_action > 0:
+            return tau_star_action
         logits = self.actor.forward(state)
         return int(np.argmax(logits))
 
@@ -115,8 +121,15 @@ class ACAgent:
 
             one_hot  = np.zeros(self.action_dim, dtype=np.float32)
             one_hot[actions[i]] = 1.0
+
+            tau_star_action = int(np.clip(round(states[i, 16] * (self.action_dim - 1)),
+                                          0, self.action_dim - 1))
+            tau_star_one_hot = np.zeros(self.action_dim, dtype=np.float32)
+            tau_star_one_hot[tau_star_action] = 1.0
+
             grad_actor = (-adv * (one_hot - probs)
-                          + self.entropy_coef * (np.log(probs) + 1)) / n
+                          + self.entropy_coef * (np.log(probs) + 1)
+                          + self.tau_star_coef * (probs - tau_star_one_hot)) / n
             self.actor.backward(grad_actor)
 
             # ── Critic update ──────────────────────────────────────────────────
