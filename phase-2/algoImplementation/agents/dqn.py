@@ -16,7 +16,7 @@ from utils.networks import MLP, Adam, ReplayBuffer, relu
 
 STATE_DIM  = 42
 ACTION_DIM = 7
-HIDDEN     = [64, 64]
+HIDDEN     = [128, 128]
 
 
 class DQNAgent:
@@ -36,7 +36,7 @@ class DQNAgent:
         buffer_size:  int   = 10000,
         eps_start:    float = 1.0,
         eps_end:      float = 0.05,
-        eps_decay:    int   = 15000,   # 10-hub: ~200 steps/ep → needs more exploration
+        eps_decay:    int   = 5000,    # ~200 steps/ep × 25 eps = ~5K steps → decay must finish
         tau:          float = 0.01,    # soft target update
         seed:         int   = 42,
     ):

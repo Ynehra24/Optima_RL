@@ -22,7 +22,7 @@ class OUNoise:
         action_dim: int = 1,
         mu: float = 0.0,
         theta: float = 0.15,
-        sigma: float = 0.05,
+        sigma: float = 0.15,
         seed: int = 42,
     ):
         self.mu = mu * np.ones(action_dim, dtype=np.float32)
@@ -68,18 +68,18 @@ class DDPGAgent:
         self.action_low = action_low
         self.action_high = action_high
 
-        self.actor = MLP(state_dim, [64, 64], action_dim, seed=seed)
-        self.actor_target = MLP(state_dim, [64, 64], action_dim, seed=seed + 1)
+        self.actor = MLP(state_dim, [128, 128], action_dim, seed=seed)
+        self.actor_target = MLP(state_dim, [128, 128], action_dim, seed=seed + 1)
 
         critic_in = state_dim + action_dim
-        self.critic = MLP(critic_in, [64, 64], 1, seed=seed + 2)
-        self.critic_target = MLP(critic_in, [64, 64], 1, seed=seed + 3)
+        self.critic = MLP(critic_in, [128, 128], 1, seed=seed + 2)
+        self.critic_target = MLP(critic_in, [128, 128], 1, seed=seed + 3)
         self._sync_targets(tau=1.0)
 
         self.actor_opt = Adam(lr=lr_actor)
         self.critic_opt = Adam(lr=lr_critic)
         self.buffer = ReplayBuffer(buffer_size, state_dim)
-        self.noise = OUNoise(action_dim=action_dim, sigma=0.05, seed=seed)
+        self.noise = OUNoise(action_dim=action_dim, sigma=0.15, seed=seed)
 
         self.losses = []
         self.q_values = []

@@ -12,9 +12,9 @@ Key differences from Phase 1:
   - Same Adam optimiser, same hyperparameters (paper §6.2)
 
 Network architecture:
-  trunk  : MLP(42 → [64, 64] → 64)   shared feature extractor
-  policy : MLP(64 → [] → 7)           logits → softmax → action probs
-  value  : MLP(64 → [] → 1)           state value V(s)
+  trunk  : MLP(42 → [128, 128] → 128)  shared feature extractor
+  policy : MLP(128 → [] → 7)           logits → softmax → action probs
+  value  : MLP(128 → [] → 1)           state value V(s)
 """
 
 import numpy as np
@@ -25,8 +25,8 @@ from utils.networks import MLP, Adam, relu, softmax
 # ── Phase 2 network dimensions ─────────────────────────────────────────────────
 STATE_DIM  = 42   # 34 local + 8 network context (multi-hub) | set to 34 for single-hub
 ACTION_DIM = 7    # hold ∈ {0,5,10,15,20,25,30} min
-TRUNK_OUT  = 64   # shared trunk output dim
-HIDDEN     = [64, 64]   # two hidden layers for richer representation
+TRUNK_OUT  = 128  # shared trunk output dim
+HIDDEN     = [128, 128]  # two hidden layers for richer representation
 
 
 class A2CNetwork:

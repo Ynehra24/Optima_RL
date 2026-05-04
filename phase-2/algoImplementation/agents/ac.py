@@ -19,7 +19,7 @@ from utils.networks import MLP, Adam, relu, softmax
 
 STATE_DIM  = 42
 ACTION_DIM = 7
-HIDDEN     = [64, 64]
+HIDDEN     = [128, 128]
 
 
 class ACAgent:
