@@ -71,9 +71,10 @@ def ctx2state(ctx):
 
 
 # ── Environment ────────────────────────────────────────────────────────────────
-def build_env(seed=42, alpha=ALPHA):
+def build_env(seed=42, alpha=ALPHA, beta=BETA):
     cfg = SimConfig()
     cfg.alpha       = alpha
+    cfg.beta        = beta
     cfg.random_seed = seed
     return AirlineNetworkSimulator(cfg)
 

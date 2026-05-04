@@ -88,10 +88,9 @@ class ContextEngine:
         if not connecting_pax:
             return [1.0] * len(hold_actions)
 
-        dest_airport = flight_state.flight.destination
-        mct = airports.get(dest_airport, 45)
-        if isinstance(mct, dict) or hasattr(mct, "mct"):
-            mct = getattr(mct, "mct", 45)
+        connection_airport = flight_state.flight.origin
+        apt = airports.get(connection_airport)
+        mct = getattr(apt, "mct", self.cfg.mct_default)
 
         pu_values = []
         for tau in hold_actions:
