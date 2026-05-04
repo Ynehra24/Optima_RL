@@ -73,9 +73,9 @@ class ACAgent:
         return action, value
 
     def greedy_action(self, state: np.ndarray) -> int:
-        tau_star_action = int(np.clip(round(state[16] * (self.action_dim - 1)),
-                                      0, self.action_dim - 1))
-        return tau_star_action
+        """Greedy action selection — used during evaluation (argmax actor)."""
+        logits = self.actor.forward(state)
+        return int(np.argmax(logits))
 
     def store(self, state, action, reward, value, done):
         self._states.append(state.copy())

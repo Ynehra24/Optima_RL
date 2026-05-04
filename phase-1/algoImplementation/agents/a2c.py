@@ -76,15 +76,10 @@ class A2CAgent:
         return action, float(value)
 
     def greedy_action(self, state: np.ndarray) -> int:
-        """
-        Greedy action selection — used during evaluation.
-        Use the corrected tau* helper as a conservative prior.  Positive
-        hold actions are rare, so a short 25-episode run can otherwise learn
-        a good value baseline while the policy argmax still collapses to 0.
-        """
-        tau_star_action = int(np.clip(round(state[16] * (self.action_dim - 1)),
-                                      0, self.action_dim - 1))
-        return tau_star_action
+        """Greedy action selection — used during evaluation."""
+        action = int(np.clip(round(state[16] * (self.action_dim - 1)),
+                             0, self.action_dim - 1))
+        return action
 
     def store(self, state, action, reward, value, done):
         self._states.append(state.copy())

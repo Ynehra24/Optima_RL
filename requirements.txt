@@ -1,14 +1,5 @@
-# Core numerical stack used by all three phases.
-numpy>=1.26
-
-# Plotting — all three phases save figures via Agg backend.
-matplotlib>=3.8
-
-# Phase 2/3 logistics environments use the Gymnasium API.
-gymnasium>=0.29
-
-# Phase 2/3 dataset preprocessing and calibration scripts.
-pandas>=2.1
-
-# Phase 3 packet-capture helper (requires libpcap-dev on Ubuntu).
-scapy>=2.5
+numpy
+matplotlib
+pandas
+gymnasium
+scapy

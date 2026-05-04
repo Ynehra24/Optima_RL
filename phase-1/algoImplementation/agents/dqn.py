@@ -85,10 +85,9 @@ class DQNAgent:
         return int(np.argmax(q))
 
     def greedy_action(self, state: np.ndarray) -> int:
-        """Greedy evaluation with the corrected local hold prior as a guardrail."""
-        tau_star_action = int(np.clip(round(state[16] * (self.action_dim - 1)),
-                                      0, self.action_dim - 1))
-        return tau_star_action
+        """Greedy evaluation (ε=0) using learned Q-values."""
+        q = self.q_net.forward(state)
+        return int(np.argmax(q))
 
     # ── Learning ───────────────────────────────────────────────────────────────
 

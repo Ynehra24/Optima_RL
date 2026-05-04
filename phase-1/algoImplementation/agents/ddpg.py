@@ -110,13 +110,9 @@ class DDPGAgent:
         return self._raw_to_hold(float(raw[0]), add_noise=False)
 
     def discrete_action(self, state: np.ndarray) -> int:
-        """
-        Convert continuous hold duration → nearest discrete action index.
-        Used by training loop which expects int actions {0..6}.
-        """
-        tau_star_action = int(np.clip(round(state[16] * (len(self.HOLD_DURATIONS) - 1)),
-                                      0, len(self.HOLD_DURATIONS) - 1))
-        return tau_star_action
+        """Greedy evaluation action as a discrete index for the simulator."""
+        hold_minutes = self.greedy_action(state)
+        return int(np.argmin([abs(hold_minutes - d) for d in self.HOLD_DURATIONS]))
 
     def exploratory_discrete_action(self, state: np.ndarray) -> int:
         """Training action that actually uses DDPG exploration noise."""
