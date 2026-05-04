@@ -173,8 +173,15 @@ class ContextEngine:
     ) -> float:
         """τ* = argmax_τ (α * PL(τ) + (1-α) * AL(τ))"""
         alpha = self.cfg.alpha
-        scores = [alpha * pl + (1 - alpha) * al for pl, al in zip(PL, AL)]
+        max_hold_for_local_policy = 15
+        candidate_count = sum(1 for tau in hold_actions if tau <= max_hold_for_local_policy)
+        scores = [
+            alpha * pl + (1 - alpha) * al
+            for pl, al in zip(PL[:candidate_count], AL[:candidate_count])
+        ]
         best_idx = int(np.argmax(scores))
+        if best_idx > 0 and PL[best_idx] - PL[0] < 0.01:
+            best_idx = 0
         return float(hold_actions[best_idx])
 
     # -----------------------------------------------------------------
