@@ -1,5 +1,5 @@
 """
-train.py — FIXED VERSION
+train.py
 ========================
 "To hold or not to hold?" — Malladi et al., AAMAS 2021
 
@@ -101,7 +101,6 @@ def build_agent(algo, cfg):
 def train(agent, env, n_eps, algo, cfg):
     print(f"\n{'='*80}")
     print(f"  Training {algo.upper()}  ({n_eps} episodes)")
-    print(f"  [FIXED] Using episode-end global reward computation")
     print(f"{'='*80}")
 
     all_rewards = []
@@ -404,7 +403,6 @@ def print_table(all_results, deltas):
     if rl_algos:
         print("\n" + "="*78)
         print("  MISSED CONNECTION REDUCTION vs BASELINES")
-        print("  Paper target: A2C ~50% reduction vs Heuristic-15 (§7.2)")
         print("="*78)
         print(f"  {'Method':<12} {'vs No-Hold':>12} {'vs Heur-15':>12} {'vs Heur-30':>12}")
         print("  " + "-"*50)
@@ -574,7 +572,7 @@ def main():
     algos = ["a2c","dqn","ac","ddpg"] if args.algo == "all" else [args.algo]
 
     print("\n" + "="*80)
-    print("  Hold-No-Hold RL  [FIXED: Episode-End Global Reward Attribution]")
+    print("  Hold-No-Hold RL]")
     print(f"  Algorithms  : {algos}")
     print(f"  Train eps   : {cfg['n_train_episodes']}  |  "
           f"Test eps: {cfg['n_test_episodes']}")
