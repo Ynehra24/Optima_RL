@@ -277,7 +277,7 @@ phase-1/algoImplementation/results/
 
 ## 6. Phase 2 — Logistics Cross-Docking
 
-Adapts HNH to freight hubs. A truck at a cross-docking facility must decide whether to wait for late inbound cargo or depart on schedule. Includes both single-hub and 10-hub cascading network modes.
+Adapts HNH to freight hubs. A truck at a cross-docking facility must decide whether to wait for late inbound cargo or depart on schedule. The full 10-hub cascading network (`--multi-hub`) is the recommended evaluation mode. **Miss Rate** (missed cargo transfers) is the primary KPI; **SLA%** (departures within 45 min of schedule) is the secondary trade-off metric.
 
 ### State Space (34-dim / 42-dim multi-hub)
 
@@ -286,49 +286,50 @@ Adapts HNH to freight hubs. A truck at a cross-docking facility must decide whet
 | **Local truck context** | Cargo utility `C_L(τ)`, operator utility `O_L(τ)`, optimal hold `τ*`, cargo value `V_k`, volume fraction `Q_k`, SLA urgency `X_k`, perishability `E_k` |
 | **Transfer context**    | Inbound delay `Δ_in`, transfer slack `Δ_slack`, driver hours `L_k`, deadline pressure `F_k`, number of inbound trucks `N_in`                                |
 | **Global hub context**  | Bay utilisation `B_G`, throughput `W_G`, failure rate `Y_G`, queue depth `Z_G`, global cargo utility `C_G`, global operator utility `O_G`                   |
+| **Network context**     | (multi-hub only, +8 dims) Downstream bay util, cascade risk, upstream inter-hub delay, hub centrality, trucks in transit                                        |
 | **Delay attribution**   | Departure delay `D_k`, arrival delay `A_k`, bay delay `G_k^bay`, road delay `G_k^road`                                                                          |
 
 ### Run
 
 ```bash
-# Train all agents — single-hub mode (default)
-python3 phase-2/algoImplementation/train.py
-
 # Train all agents — 10-hub cascading network (recommended)
-python3 phase-2/algoImplementation/train.py --multi-hub
+python -X utf8 phase-2/algoImplementation/train.py --multi-hub
+
+# Train all agents — single-hub mode
+python -X utf8 phase-2/algoImplementation/train.py
 
 # Train a single agent
-python3 phase-2/algoImplementation/train.py --algo dqn --multi-hub
+python -X utf8 phase-2/algoImplementation/train.py --algo dqn --multi-hub
 
-# Quick smoke test
-python3 phase-2/algoImplementation/train.py --episodes 2 --no-sweep
+# Quick smoke test (2 episodes, no plots)
+python -X utf8 phase-2/algoImplementation/train.py --episodes 2 --no-plots --no-sweep --multi-hub
 
 # Run simulator validation suite
 cd phase-2 && python3 -m simulator.validate_simulator && cd ..
-
-# Run reward-engineering tests
-cd phase-2 && python3 -m rewardEngineering.test_tree && cd ..
 ```
+
+> **Windows note:** Use `python -X utf8` to avoid UnicodeEncodeError on cp1252 terminals. The script auto-reconfigures stdout to UTF-8 as well.
 
 ### CLI Options
 
 ```
 --algo       {all, a2c, dqn, ac, ddpg}   Agent(s) to train (default: all)
 --episodes   N                            Override train episode count
---multi-hub                               Enable 10-hub cascading network
+--multi-hub                               Enable 10-hub cascading network (recommended)
 --no-plots                                Skip figure generation
---no-sweep                                Skip α/β tunability sweep
+--no-sweep                                Skip alpha/beta tunability sweep
 ```
 
 ### Outputs
 
 ```text
 phase-2/algoImplementation/results/
-├── figure6_missed_transfers.png   ← Missed transfers + miss rate
-├── figure6b_bay_delay.png         ← Bay utilisation + departure delay
-├── figure7_rl_metrics.png         ← Training curves
-├── summary.json                   ← All metrics
-└── *_agent.pkl                    ← Saved agent weights
+├── figure6_missed_transfers.png   <- Missed transfers + miss rate
+├── figure6b_bay_delay.png         <- Bay utilisation + departure delay
+├── figure7_rl_metrics.png         <- Training curves (reward, loss, value)
+├── figure8_tunability.png         <- alpha/beta sweep (A2C)
+├── summary.json                   <- All metrics (SLA%, throughput, miss rate, holds%)
+└── *_agent.pkl                    <- Saved agent weights
 ```
 
 ---
@@ -350,12 +351,12 @@ Adapts HNH to cloud task scheduling. The agent decides whether to delay a downst
 
 ### Training Presets
 
-| Preset          | Train eps | Test eps | Episode cap | HNH decisions |
-| --------------- | --------- | -------- | ----------- | ------------- |
-| `smoke`       | 2         | 1        | 300 s       | 30            |
-| `standard` ✅ | 30        | 8        | 3,600 s     | 750           |
-| `long`        | 100       | 20       | 7,200 s     | 1,500         |
-| `paper`       | 200       | 30       | 86,400 s    | 5,000         |
+| Preset         | Train eps | Test eps | Episode cap | HNH decisions |
+| -------------- | --------- | -------- | ----------- | ------------- |
+| `smoke`      | 2         | 1        | 300 s       | 30            |
+| `standard`  | 30        | 8        | 3,600 s     | 750           |
+| `long`       | 100       | 20       | 7,200 s     | 1,500         |
+| `paper`      | 200       | 30       | 86,400 s    | 5,000         |
 
 ### Run
 
@@ -430,14 +431,19 @@ All agents are implemented from scratch using pure NumPy — no deep-learning fr
 
 ### Shared Defaults
 
-| Hyperparameter                | Value  |
-| ----------------------------- | ------ |
-| Learning rate `lr`          | 0.0001 |
-| Discount `γ`               | 0.8    |
-| Batch size                    | 32     |
-| Passenger/cargo weight `α` | 0.75   |
-| Local/global weight `β`    | 0.75   |
-| Random seed                   | 42     |
+| Hyperparameter                      | Phase 1 | Phase 2 | Phase 3 |
+| ----------------------------------- | ------- | ------- | ------- |
+| Learning rate `lr`                  | 0.0001  | 0.0003  | 0.0003  |
+| Discount `gamma`                    | 0.8     | 0.9     | 0.9     |
+| Batch size                          | 32      | 32      | 32      |
+| Hidden layers (MLP)                 | [64,64] | [128,128] | [128,128] |
+| Cargo/passenger weight `alpha`      | 0.75    | 0.50    | 0.50    |
+| Local/global weight `beta`          | 0.75    | 0.75    | 0.75    |
+| DQN epsilon decay steps             | 5000    | 5000    | 4000    |
+| DDPG OU noise sigma                 | 0.05    | 0.15    | —       |
+| Random seed                         | 42      | 42      | 42      |
+
+> **Phase 2** uses `lr=0.0003`, `gamma=0.9`, hidden layers `[128, 128]`, and dense action shaping in the reward function.
 
 ### Hold Actions (all phases)
 
@@ -467,10 +473,11 @@ results/
 │   ├── figure7_rl_metrics.png
 │   └── figure8_tunability.png
 ├── phase2/
-│   ├── summary.json             ← Miss rate, OTP, bay utilisation
+│   ├── summary.json             <- Miss rate, SLA%, throughput, holds%
 │   ├── figure6_missed_transfers.png
 │   ├── figure6b_bay_delay.png
-│   └── figure7_rl_metrics.png
+│   ├── figure7_rl_metrics.png
+│   └── figure8_tunability.png
 └── phase3/
     ├── summary.json             ← Completed %, evictions, stalls, reward
     ├── eval_run_summary.json
