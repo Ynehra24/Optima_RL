@@ -227,20 +227,72 @@ class LogisticsRewardCalculator:
         hold_minutes: float,
         truck_id: str,
     ) -> float:
-        """R_T^k = β · R_L^k + (1-β) · R_G^k
+        """R_T^k = β · R_L^k + (1-β) · R_G^k + action_shaping
 
-        Identical to Phase 1.  The richness comes from:
-          - R_L consuming value-weighted, SLA-aware CL/OL from ContextEngine
-          - R_G incorporating bay-congestion attribution via the extended DT
+        Extended from Phase 1 with dense action-quality shaping (mirroring
+        Phase 3's _compute_action_shaping) to give agents a learnable signal.
 
-        Note: R_G may only be fully known after downstream events have
-        been processed.  In online RL, this is the reward from the
-        *previous* epoch's hold decision.
+        The shaping rewards holds that cover real feeder delays and penalizes
+        excess hold time, holding under bay congestion, and residual missed
+        delay.
         """
         r_l = self.compute_local_reward(ctx, hold_minutes)
         r_g = self.get_global_reward(truck_id)
 
-        return self.beta * r_l + (1 - self.beta) * r_g
+        r_base = self.beta * r_l + (1 - self.beta) * r_g
+        r_shaping = self._compute_action_shaping(ctx, hold_minutes)
+
+        return float(max(-1.0, min(1.0, r_base + r_shaping)))
+
+    def _compute_action_shaping(
+        self,
+        ctx: TruckContext,
+        hold_minutes: float,
+    ) -> float:
+        """Dense action-quality signal for learning (Phase 3 analog).
+
+        Rewards:
+          + Holds that cover actual feeder delay (useful hold)
+          + Small no-hold bonus when feeders are on time
+
+        Penalties:
+          - Hold time exceeding feeder delay (wasted hold)
+          - Residual feeder delay not covered by hold (missed opportunity)
+          - Holding when bays are congested (resource pressure)
+        """
+        feeder_delay = max(0.0, ctx.delta_in)        # how late feeders are
+        useful_hold = min(hold_minutes, feeder_delay)
+        wasted_hold = max(0.0, hold_minutes - feeder_delay)
+        residual = max(0.0, feeder_delay - hold_minutes)
+
+        # Downstream connectivity: holding matters more when there IS cargo
+        has_feeders = 1.0 if ctx.N_in > 0 else 0.35
+        # SLA urgency weight: express cargo makes holds more valuable
+        urgency_weight = 0.5 + 0.5 * (ctx.X_k / 2.0)
+
+        # Positive: reward covering real delay
+        benefit = 0.40 * has_feeders * urgency_weight * (
+            useful_hold / max(self.cfg.delta_f, 1.0)
+        )
+
+        # Negative: penalize uncovered feeder delay (could have held more)
+        residual_penalty = 0.30 * has_feeders * urgency_weight * (
+            residual / max(self.cfg.delta_c, 1.0)
+        )
+
+        # Negative: penalize wasted hold time
+        waste_penalty = 0.30 * (wasted_hold / max(self.cfg.delta_f, 1.0))
+
+        # Negative: penalize holding under bay congestion
+        bay_pressure = max(0.0, ctx.B_G - self.cfg.bay_congestion_threshold)
+        occupancy_penalty = 0.20 * bay_pressure * (
+            hold_minutes / 30.0
+        )
+
+        # Small bonus for correctly choosing no-hold when feeders are on time
+        no_hold_bonus = 0.04 if hold_minutes == 0.0 and feeder_delay <= 2.0 else 0.0
+
+        return benefit + no_hold_bonus - residual_penalty - waste_penalty - occupancy_penalty
 
     # ── Reset ─────────────────────────────────────────────────────────
 
