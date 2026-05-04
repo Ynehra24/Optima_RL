@@ -1,6 +1,6 @@
 # Optima RL — Hold-or-Not-Hold Reinforcement Learning
 
-> *"To hold or not to hold?"* — Malladi et al., AAMAS 2021
+> _"To hold or not to hold?"_ — Malladi et al., AAMAS 2021
 
 A three-phase study that adapts the **Hold-or-Not-Hold (HNH)** decision problem across progressively complex operational domains, training custom RL agents (A2C, DQN, AC, DDPG) to minimise delay propagation and improve system-wide throughput.
 
@@ -27,13 +27,15 @@ Complex interconnected networks — passenger airlines, freight hubs, cloud clus
 
 This project formalises that trade-off as an RL problem across three domains:
 
-| Phase             | Domain               | Core Decision                                           |
-| ----------------- | -------------------- | ------------------------------------------------------- |
+| Phase       | Domain               | Core Decision                                           |
+| ----------- | -------------------- | ------------------------------------------------------- |
 | **Phase 1** | Airline Network      | Hold connecting flight for delayed passengers?          |
 | **Phase 2** | Freight & Logistics  | Hold cross-dock truck for delayed inbound cargo?        |
 | **Phase 3** | Cloud DAG Scheduling | Delay downstream DAG task for struggling prerequisites? |
 
 All three phases share the same agent zoo (A2C, DQN, AC, DDPG), the same reward structure (α/β-weighted local + global utility), and evaluate against three baseline policies: **No-Hold**, **Heuristic-15**, and **Heuristic-30** (or domain equivalents).
+
+![alt text](assets/architecture_diagram.png)
 
 ---
 
@@ -143,16 +145,16 @@ bash run.sh
 
 ### What `run.sh` Does
 
-| Step | Action                                                                                                    |
-| ---- | --------------------------------------------------------------------------------------------------------- |
+| Step | Action                                                                                        |
+| ---- | --------------------------------------------------------------------------------------------- |
 | 1    | `apt-get` installs `python3`, `python3-venv`, `python3-dev`, `build-essential`, `libpcap-dev` |
-| 2    | Creates `./venv` and activates the virtual environment                                                  |
-| 3    | `pip install` all Python dependencies                                                                   |
-| 4    | Trains all agents on**Phase 1** (airline, 25 episodes each)                                         |
-| 5    | Trains all agents on**Phase 2** (logistics multi-hub, 25 episodes)                                  |
-| 6    | Trains all agents on**Phase 3** (DAG scheduling, `standard` preset, 30 episodes)                  |
-| 7    | Runs `benchmark_check.py` to generate a pass/fail evaluation report                                     |
-| 8    | Writes `results/run_summary.txt` with metric tables from all three phases                               |
+| 2    | Creates `./venv` and activates the virtual environment                                        |
+| 3    | `pip install` all Python dependencies                                                         |
+| 4    | Trains all agents on**Phase 1** (airline, 25 episodes each)                                   |
+| 5    | Trains all agents on**Phase 2** (logistics multi-hub, 25 episodes)                            |
+| 6    | Trains all agents on**Phase 3** (DAG scheduling, `standard` preset, 30 episodes)              |
+| 7    | Runs `benchmark_check.py` to generate a pass/fail evaluation report                           |
+| 8    | Writes `results/run_summary.txt` with metric tables from all three phases                     |
 
 All output lands in `./results/`:
 
@@ -177,10 +179,10 @@ If you prefer to run phases individually (e.g., on Windows, macOS, or an existin
 
 ### Prerequisites
 
-| Requirement | Version                              |
-| ----------- | ------------------------------------ |
-| Python      | ≥ 3.10                              |
-| pip         | ≥ 23                                |
+| Requirement | Version                           |
+| ----------- | --------------------------------- |
+| Python      | ≥ 3.10                            |
+| pip         | ≥ 23                              |
 | libpcap     | (Linux/macOS — needed by `scapy`) |
 
 On Ubuntu/Debian:
@@ -224,14 +226,14 @@ Simulates an airline network with passenger connections. The RL agent decides, a
 
 ### State Space (17-dim)
 
-| Component                | Symbol      | Meaning                                   |
-| ------------------------ | ----------- | ----------------------------------------- |
+| Component                | Symbol   | Meaning                                   |
+| ------------------------ | -------- | ----------------------------------------- |
 | Local passenger utility  | `P_L(τ)` | Passenger benefit per hold duration       |
 | Local airline utility    | `A_L(τ)` | Airline delay cost per hold               |
-| Global passenger utility | `P_G`     | Network-wide avg passenger utility (24 h) |
-| Global airline utility   | `A_G`     | Network OTP proxy                         |
-| Locally optimal hold     | `τ*`     | Best τ from local objective              |
-| Reward weights           | `α, β`  | Passenger vs airline, local vs global     |
+| Global passenger utility | `P_G`    | Network-wide avg passenger utility (24 h) |
+| Global airline utility   | `A_G`    | Network OTP proxy                         |
+| Locally optimal hold     | `τ*`     | Best τ from local objective               |
+| Reward weights           | `α, β`   | Passenger vs airline, local vs global     |
 
 ### Run
 
@@ -281,13 +283,13 @@ Adapts HNH to freight hubs. A truck at a cross-docking facility must decide whet
 
 ### State Space (34-dim / 42-dim multi-hub)
 
-| Group                         | Key Features                                                                                                                                                            |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Group                   | Key Features                                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Local truck context** | Cargo utility `C_L(τ)`, operator utility `O_L(τ)`, optimal hold `τ*`, cargo value `V_k`, volume fraction `Q_k`, SLA urgency `X_k`, perishability `E_k` |
-| **Transfer context**    | Inbound delay `Δ_in`, transfer slack `Δ_slack`, driver hours `L_k`, deadline pressure `F_k`, number of inbound trucks `N_in`                                |
-| **Global hub context**  | Bay utilisation `B_G`, throughput `W_G`, failure rate `Y_G`, queue depth `Z_G`, global cargo utility `C_G`, global operator utility `O_G`                   |
-| **Network context**     | (multi-hub only, +8 dims) Downstream bay util, cascade risk, upstream inter-hub delay, hub centrality, trucks in transit                                        |
-| **Delay attribution**   | Departure delay `D_k`, arrival delay `A_k`, bay delay `G_k^bay`, road delay `G_k^road`                                                                          |
+| **Transfer context**    | Inbound delay `Δ_in`, transfer slack `Δ_slack`, driver hours `L_k`, deadline pressure `F_k`, number of inbound trucks `N_in`                           |
+| **Global hub context**  | Bay utilisation `B_G`, throughput `W_G`, failure rate `Y_G`, queue depth `Z_G`, global cargo utility `C_G`, global operator utility `O_G`              |
+| **Network context**     | (multi-hub only, +8 dims) Downstream bay util, cascade risk, upstream inter-hub delay, hub centrality, trucks in transit                               |
+| **Delay attribution**   | Departure delay `D_k`, arrival delay `A_k`, bay delay `G_k^bay`, road delay `G_k^road`                                                                 |
 
 ### Run
 
@@ -340,23 +342,23 @@ Adapts HNH to cloud task scheduling. The agent decides whether to delay a downst
 
 ### State Space (88-dim)
 
-| Group                       | Key Features                                                                                                                                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **RL meta**           | Pipeline success probability `C_L(τ)`, cluster efficiency cost `O_L(τ)`, optimal hold `τ*`, trade-off weight `α`                                                                    |
-| **Task identity**     | Job ID, task index, priority, scheduling class, workload type, GPU type, instance count, task status                                                                                            |
-| **DAG structure**     | Parents, children, descendants, critical-path length, slack time, critical-path flag, depth, fan-out ratio, upstream delay `Δ_in`, job size, DAG completion fraction                         |
-| **Resource demand**   | Planned CPU / memory / GPU, CPU usage, GPU utilisation, avg/max memory usage, resource cost score                                                                                               |
+| Group                 | Key Features                                                                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RL meta**           | Pipeline success probability `C_L(τ)`, cluster efficiency cost `O_L(τ)`, optimal hold `τ*`, trade-off weight `α`                                                                            |
+| **Task identity**     | Job ID, task index, priority, scheduling class, workload type, GPU type, instance count, task status                                                                                        |
+| **DAG structure**     | Parents, children, descendants, critical-path length, slack time, critical-path flag, depth, fan-out ratio, upstream delay `Δ_in`, job size, DAG completion fraction                        |
+| **Resource demand**   | Planned CPU / memory / GPU, CPU usage, GPU utilisation, avg/max memory usage, resource cost score                                                                                           |
 | **Global cluster**    | CPU/GPU capacity + utilisation, pending/running tasks, idle machines, machine load avg, network utilisation, failed task rate, global pipeline utility `C_G`, global operator utility `O_G` |
-| **Delay attribution** | Start delay `D_k`, completion delay `A_k`, hold applied `H_k`, queue delay `GD_k`, causal influence `ρ(H_k, A_k)`, SLO deadline                                                      |
+| **Delay attribution** | Start delay `D_k`, completion delay `A_k`, hold applied `H_k`, queue delay `GD_k`, causal influence `ρ(H_k, A_k)`, SLO deadline                                                             |
 
 ### Training Presets
 
-| Preset         | Train eps | Test eps | Episode cap | HNH decisions |
-| -------------- | --------- | -------- | ----------- | ------------- |
-| `smoke`      | 2         | 1        | 300 s       | 30            |
+| Preset      | Train eps | Test eps | Episode cap | HNH decisions |
+| ----------- | --------- | -------- | ----------- | ------------- |
+| `smoke`     | 2         | 1        | 300 s       | 30            |
 | `standard`  | 30        | 8        | 3,600 s     | 750           |
-| `long`       | 100       | 20       | 7,200 s     | 1,500         |
-| `paper`      | 200       | 30       | 86,400 s    | 5,000         |
+| `long`      | 100       | 20       | 7,200 s     | 1,500         |
+| `paper`     | 200       | 30       | 86,400 s    | 5,000         |
 
 ### Run
 
@@ -422,26 +424,26 @@ phase-3/algoImplementation/training_logs/
 
 All agents are implemented from scratch using pure NumPy — no deep-learning framework dependency.
 
-| Agent          | Type                      | Key Architecture                                 |
-| -------------- | ------------------------- | ------------------------------------------------ |
-| **A2C**  | Actor-Critic (on-policy)  | Shared MLP backbone, policy + value heads, GAE   |
+| Agent    | Type                      | Key Architecture                                |
+| -------- | ------------------------- | ----------------------------------------------- |
+| **A2C**  | Actor-Critic (on-policy)  | Shared MLP backbone, policy + value heads, GAE  |
 | **DQN**  | Value-based (off-policy)  | MLP Q-network, experience replay, ε-greedy      |
-| **AC**   | Actor-Critic (on-policy)  | Separate actor/critic MLPs, REINFORCE baseline   |
+| **AC**   | Actor-Critic (on-policy)  | Separate actor/critic MLPs, REINFORCE baseline  |
 | **DDPG** | Actor-Critic (off-policy) | Continuous actor → discretised, target networks |
 
 ### Shared Defaults
 
-| Hyperparameter                      | Phase 1 | Phase 2 | Phase 3 |
-| ----------------------------------- | ------- | ------- | ------- |
-| Learning rate `lr`                  | 0.0001  | 0.0003  | 0.0003  |
-| Discount `gamma`                    | 0.8     | 0.9     | 0.9     |
-| Batch size                          | 32      | 32      | 32      |
-| Hidden layers (MLP)                 | [64,64] | [128,128] | [128,128] |
-| Cargo/passenger weight `alpha`      | 0.75    | 0.50    | 0.50    |
-| Local/global weight `beta`          | 0.75    | 0.75    | 0.75    |
-| DQN epsilon decay steps             | 5000    | 5000    | 4000    |
-| DDPG OU noise sigma                 | 0.05    | 0.15    | —       |
-| Random seed                         | 42      | 42      | 42      |
+| Hyperparameter                 | Phase 1 | Phase 2   | Phase 3   |
+| ------------------------------ | ------- | --------- | --------- |
+| Learning rate `lr`             | 0.0001  | 0.0003    | 0.0003    |
+| Discount `gamma`               | 0.8     | 0.9       | 0.9       |
+| Batch size                     | 32      | 32        | 32        |
+| Hidden layers (MLP)            | [64,64] | [128,128] | [128,128] |
+| Cargo/passenger weight `alpha` | 0.75    | 0.50      | 0.50      |
+| Local/global weight `beta`     | 0.75    | 0.75      | 0.75      |
+| DQN epsilon decay steps        | 5000    | 5000      | 4000      |
+| DDPG OU noise sigma            | 0.05    | 0.15      | —         |
+| Random seed                    | 42      | 42        | 42        |
 
 > **Phase 2** uses `lr=0.0003`, `gamma=0.9`, hidden layers `[128, 128]`, and dense action shaping in the reward function.
 
@@ -491,7 +493,7 @@ results/
 ## 10. Reference
 
 Malladi, T., Murugappan, K., Sudarsanam, D., Suriyanarayanan, R., & Vasan, A. (2021).
-*To hold or not to hold? — Reducing Passenger Missed Connections in Airlines using Reinforcement Learning.*
+_To hold or not to hold? — Reducing Passenger Missed Connections in Airlines using Reinforcement Learning._
 **AAMAS 2021**, 862–870.
 
 ---
