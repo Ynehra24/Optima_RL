@@ -5,32 +5,28 @@ agents/a2c.py  (v3 — fixed greedy_action for evaluation)
 import numpy as np
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.networks import MLP, Adam, relu, softmax
+from utils.networks import MLP, Adam, softmax
 
 
 class A2CNetwork:
     def __init__(self, state_dim: int = 17, action_dim: int = 7, seed: int = 42):
-        self.trunk  = MLP(state_dim, [17], 17, seed=seed)
-        self.policy = MLP(17, [], action_dim, seed=seed + 10)
-        self.value  = MLP(17, [], 1, seed=seed + 20)
-        self._trunk_out = None
+        self.policy = MLP(state_dim, [17], action_dim, seed=seed + 10)
+        self.value  = MLP(state_dim, [17], 1, seed=seed + 20)
 
     def forward(self, state: np.ndarray):
-        trunk_raw       = self.trunk.forward(state)
-        self._trunk_out = relu(trunk_raw)
-        policy_logits   = self.policy.forward(self._trunk_out)
+        policy_logits   = self.policy.forward(state)
         probs           = softmax(policy_logits)
-        value_out       = self.value.forward(self._trunk_out)
+        value_out       = self.value.forward(state)
         value           = float(value_out.flat[0])
         return probs, value
 
     @property
     def params(self):
-        return self.trunk.params + self.policy.params + self.value.params
+        return self.policy.params + self.value.params
 
     @property
     def grads(self):
-        return self.trunk.grads + self.policy.grads + self.value.grads
+        return self.policy.grads + self.value.grads
 
 
 class A2CAgent:
