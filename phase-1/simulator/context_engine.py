@@ -88,20 +88,31 @@ class ContextEngine:
         if not connecting_pax:
             return [1.0] * len(hold_actions)
 
-        connection_airport = flight_state.flight.origin
-        apt = airports.get(connection_airport)
-        mct = getattr(apt, "mct", self.cfg.mct_default)
+        inbound_connection_airport = flight_state.flight.origin
+        outbound_connection_airport = flight_state.flight.destination
+        inbound_mct = getattr(
+            airports.get(inbound_connection_airport), "mct", self.cfg.mct_default
+        )
+        outbound_mct = getattr(
+            airports.get(outbound_connection_airport), "mct", self.cfg.mct_default
+        )
 
         pu_values = []
         for tau in hold_actions:
-            utilities = []
+            weighted_utility = 0.0
+            total_weight = 0.0
             for pax in connecting_pax:
+                mct = outbound_mct if pax.legs and pax.legs[0] == flight_state.flight.flight_id else inbound_mct
                 delay = self._estimate_pax_delay(
                     pax, flight_state, tau, mct, flight_map
                 )
                 sigma = self._pax_disutility(delay)
-                utilities.append(1.0 - sigma)
-            pu_values.append(float(np.mean(utilities)) if utilities else 1.0)
+                weight = max(1, pax.group_size)
+                weighted_utility += (1.0 - sigma) * weight
+                total_weight += weight
+            pu_values.append(
+                float(weighted_utility / total_weight) if total_weight else 1.0
+            )
         return pu_values
 
     # -----------------------------------------------------------------
@@ -207,7 +218,8 @@ class ContextEngine:
         Parameters
         ----------
         pax : PaxItinerary
-            The connecting passenger (must have legs[0] = inbound, legs[1] = outbound)
+            A passenger affected by this flight.  The flight may be their
+            connecting outbound leg or their inbound leg to a later connection.
         outbound_flight : FlightState
             The OUTBOUND (connecting) flight that we're deciding to hold
         hold_tau : int
@@ -219,52 +231,67 @@ class ContextEngine:
 
         Logic
         -----
-        1. Get the inbound flight from pax.legs[0]
-        2. Estimate inbound's arrival time (using total_arrival_delay)
-        3. Compute connection window = outbound departure - inbound arrival
-        4. If window >= mct: PAX makes connection → delay = outbound's delay
-           If window < mct: PAX misses → rebooked with +120 min penalty
+        1. If this flight is the second leg, estimate whether holding saves the
+           inbound connection.
+        2. If this flight is the first leg, estimate whether holding breaks the
+           passenger's onward connection.
         """
         if len(pax.legs) < 2:
             return 0.0
 
-        # Get the inbound (feeder) flight
-        inbound_fid = pax.legs[0]
-        inbound_fs = flight_map.get(inbound_fid)
-        if inbound_fs is None:
-            return 0.0
+        flight_id = outbound_flight.flight.flight_id
 
-        # Estimate inbound arrival time
-        inbound_est_arrival = (
-            inbound_fs.flight.scheduled_arrival
-            + inbound_fs.total_arrival_delay
-        )
+        if pax.legs[1] == flight_id:
+            inbound_fs = flight_map.get(pax.legs[0])
+            if inbound_fs is None:
+                return 0.0
 
-        # Outbound departure time: scheduled + intrinsic delay + hold
-        # Key fix: include the flight's real departure delay, not just τ
-        outbound_intrinsic = max(
-            outbound_flight.intrinsic_departure_delay,
-            outbound_flight.propagated_departure_delay,
-        )
-        outbound_est_dep = (
-            outbound_flight.flight.scheduled_departure
-            + outbound_intrinsic
-            + outbound_flight.ground_departure_delay
-            + hold_tau
-        )
-
-        # Connection window
-        connection_window = outbound_est_dep - inbound_est_arrival
-
-        if connection_window >= mct:
-            # PAX makes the connection
-            # Their delay to final destination = outbound's delay + the hold we impose
-            outbound_delay = outbound_flight.total_arrival_delay + hold_tau
-            return max(0, outbound_delay)
-        else:
-            # PAX misses and gets rebooked
-            # Penalty: assume rebook adds ~120 min to their trip
+            inbound_est_arrival = (
+                inbound_fs.flight.scheduled_arrival
+                + inbound_fs.total_arrival_delay
+            )
+            outbound_intrinsic = max(
+                outbound_flight.intrinsic_departure_delay,
+                outbound_flight.propagated_departure_delay,
+            )
+            outbound_est_dep = (
+                outbound_flight.flight.scheduled_departure
+                + outbound_intrinsic
+                + outbound_flight.ground_departure_delay
+                + hold_tau
+            )
+            connection_window = outbound_est_dep - inbound_est_arrival
+            if connection_window >= mct:
+                return max(0, outbound_flight.total_arrival_delay + hold_tau)
             return 120.0
+
+        if pax.legs[0] == flight_id:
+            next_fs = flight_map.get(pax.legs[1])
+            if next_fs is None:
+                return 0.0
+
+            current_est_arrival = (
+                outbound_flight.flight.scheduled_arrival
+                + outbound_flight.total_arrival_delay
+                + hold_tau
+            )
+            next_intrinsic = max(
+                next_fs.intrinsic_departure_delay,
+                next_fs.propagated_departure_delay,
+            )
+            next_hold = next_fs.hold_delay if next_fs.hnh_decided else 0.0
+            next_est_dep = (
+                next_fs.flight.scheduled_departure
+                + next_intrinsic
+                + next_fs.ground_departure_delay
+                + next_hold
+            )
+            connection_window = next_est_dep - current_est_arrival
+            if connection_window >= mct:
+                return max(0, outbound_flight.total_arrival_delay + hold_tau)
+            return 120.0
+
+        return 0.0
 
     def _estimate_flight_arrival_delay(
         self, flight_state: FlightState, hold_tau: int

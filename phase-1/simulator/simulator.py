@@ -559,8 +559,13 @@ class AirlineNetworkSimulator:
         # Dynamic propagated delay
         fs.propagated_departure_delay = self._compute_propagated_delay_dynamic(fid)
 
-        connecting_pax_ids = self._incoming_pax.get(fid, [])
-        connecting_pax = [self.pax[pid] for pid in connecting_pax_ids if pid in self.pax]
+        incoming_pax_ids = self._incoming_pax.get(fid, [])
+        outgoing_pax_ids = [
+            pid for pid in self._outgoing_pax.get(fid, [])
+            if pid in self.pax and len(self.pax[pid].legs) >= 2
+        ]
+        affected_pax_ids = dict.fromkeys(incoming_pax_ids + outgoing_pax_ids)
+        connecting_pax = [self.pax[pid] for pid in affected_pax_ids if pid in self.pax]
 
         ctx = self.context_engine.build_context(
             flight_state=fs,
@@ -576,7 +581,7 @@ class AirlineNetworkSimulator:
             "flight_id": fid,
             "origin": fs.flight.origin,
             "destination": fs.flight.destination,
-            "connecting_pax_count": len(connecting_pax),
+            "connecting_pax_count": len(incoming_pax_ids),
             "scheduled_departure": fs.flight.scheduled_departure,
             "intrinsic_delay": fs.intrinsic_departure_delay,
             "propagated_delay": fs.propagated_departure_delay,

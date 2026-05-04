@@ -39,6 +39,7 @@ class A2CAgent:
         gamma:        float = 0.8,
         batch_size:   int   = 32,
         entropy_coef: float = 0.10,   # raised from 0.05 — prevents early collapse to τ=0
+        tau_star_coef: float = 0.50,
         value_coef:   float = 0.5,
         seed:         int   = 42,
     ):
@@ -47,6 +48,7 @@ class A2CAgent:
         self.gamma        = gamma
         self.batch_size   = batch_size
         self.entropy_coef = entropy_coef
+        self.tau_star_coef = tau_star_coef
         self.value_coef   = value_coef
 
         self.network   = A2CNetwork(state_dim, action_dim, seed)
@@ -137,7 +139,14 @@ class A2CAgent:
 
             grad_policy  = -adv * (one_hot - probs_clipped) / n
             grad_entropy = self.entropy_coef * (np.log(probs_clipped) + 1) / n
-            self.network.policy.backward(grad_policy + grad_entropy)
+
+            tau_star_action = int(np.clip(round(states[i, 16] * (self.action_dim - 1)),
+                                          0, self.action_dim - 1))
+            tau_star_one_hot = np.zeros(self.action_dim, dtype=np.float32)
+            tau_star_one_hot[tau_star_action] = 1.0
+            grad_tau_star = self.tau_star_coef * (probs_clipped - tau_star_one_hot) / n
+
+            self.network.policy.backward(grad_policy + grad_entropy + grad_tau_star)
 
             grad_value = np.array([2 * self.value_coef * v_error / n])
             self.network.value.backward(grad_value)
